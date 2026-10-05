@@ -1,6 +1,6 @@
 /* Generates the Syrax PWA icons (no image libs — raw PNG via node:zlib).
-   Design: deep blue-black canvas + glowing electric-blue ring + hot core —
-   the same reactor-orb identity the app uses. Run: node scripts/gen-icons.mjs */
+   Design: MAJESTIC CHATBOT — glowing blue chat bubble with a friendly bot
+   face, crowned (royal/majestic) on deep space navy. Run: node scripts/gen-icons.mjs */
 import { deflateSync } from 'node:zlib'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -48,65 +48,109 @@ function encodePNG(w, h, rgba) {
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))])
 }
 
-/* ── draw the glowing reactor orb ───────────────────────────────────────── */
+/* ── draw the MAJESTIC CHATBOT icon ────────────────────────────────────────
+   Design space is a 512 grid centered at 0,0 (scaled by `scale` so the
+   maskable variant shrinks into the safe circle):
+     · chat bubble = rounded box + rotated tail bar, electric-blue gradient
+       with a bright rim and a soft halo,
+     · friendly bot face = two glowing eyes + smile arc, clipped to the bubble,
+     · crown = band + three pearls (majestic), icy blue-white with its glow. */
 const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v)
 function drawIcon(size, { scale = 1 }) {
   const px = Buffer.alloc(size * size * 4)
+  const u = (size / 512) * scale // design unit → pixels
+  const w = 1 / u // design units per pixel (anti-alias width)
   const cx = size / 2
   const cy = size / 2
-  const u = size / 512
-  const ringR = 190 * u * scale
-  const ringW = 27 * u * scale
-  const coreR = 64 * u * scale
-  const glowSig = ringW * 1.5
+
+  const sdRB = (x, y, bx, by, r) => {
+    const qx = Math.abs(x) - bx + r
+    const qy = Math.abs(y) - by + r
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r
+  }
+  const sdC = (x, y, r) => Math.hypot(x, y) - r
+  const cov = (d) => Math.max(0, Math.min(1, (0.5 * w - d) / w)) // AA coverage
+  const mix = (a, b, t) => a + (b - a) * t
+
+  const cosA = Math.cos(0.62)
+  const sinA = Math.sin(0.62)
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const dx = x + 0.5 - cx
-      const dy = y + 0.5 - cy
-      const d = Math.sqrt(dx * dx + dy * dy)
+      const x0 = (x + 0.5 - cx) / u
+      const y0 = (y + 0.5 - cy) / u
 
-      // base: #040711 with a faint radial blue lift toward the center
-      const lift = Math.exp(-d / (size * 0.55))
-      let r = 4 + 14 * lift
-      let g = 7 + 22 * lift
-      let b = 17 + 46 * lift
+      // deep-space base (#040711) with a faint radial lift
+      const rad = Math.hypot(x0, y0)
+      const lift = Math.exp(-rad / 320)
+      let r = 4 + 16 * lift
+      let g = 7 + 26 * lift
+      let b = 17 + 58 * lift
 
-      // outer glow halo around the ring
-      const glow = 0.62 * Math.exp(-((d - ringR) ** 2) / (2 * glowSig * glowSig))
-      r += 59 * glow
-      g += 130 * glow
-      b += 246 * glow
+      // ── chat bubble: rounded box + tail bar tilted down-left ──
+      const dBub = sdRB(x0, y0 - 20, 165, 118, 50)
+      const tx = x0 + 118
+      const ty = y0 - 148
+      const rx = tx * cosA + ty * sinA
+      const ry = -tx * sinA + ty * cosA
+      const dBody = Math.min(dBub, sdRB(rx, ry, 15, 58, 10))
 
-      // crisp ring (top slightly brighter — light from above)
-      const edge = (ringW / 2 - Math.abs(d - ringR)) / 1.6
-      if (edge > 0) {
-        const k = Math.min(1, edge)
-        const top = 1 + 0.35 * (-dy / (d || 1))
-        const mr = 59 * top
-        const mg = 130 * top
-        const mb = 246 * top
-        r += (mr - r) * k
-        g += (mg - g) * k
-        b += (mb - b) * k
-        // bright inner edge line
-        const line = Math.max(0, 1 - Math.abs(d - ringR + ringW * 0.18) / (ringW * 0.22))
-        r += (255 - r) * line * 0.55
-        g += (245 - g) * line * 0.55
-        b += (255 - b) * line * 0.55
+      // halo glow around the bubble
+      const halo = 0.7 * Math.exp(-(dBody * dBody) / (2 * 46 * 46))
+      r += 59 * halo
+      g += 130 * halo
+      b += 246 * halo
+
+      const bodyC = cov(dBody)
+      if (bodyC > 0) {
+        // gradient: electric blue (top) → deep royal blue (bottom)
+        const t = Math.max(0, Math.min(1, (y0 + 100) / 240))
+        let fr = mix(59, 26, t)
+        let fg = mix(130, 60, t)
+        let fb = mix(246, 170, t)
+        // bright inner rim (light from above)
+        const rim = Math.exp(-(dBody * dBody) / (2 * 14 * 14))
+        fr += (207 - fr) * rim * 0.9
+        fg += (227 - fg) * rim * 0.9
+        fb += (255 - fb) * rim * 0.9
+        r += (fr - r) * bodyC
+        g += (fg - g) * bodyC
+        b += (fb - b) * bodyC
       }
 
-      // hot core: blue → white center
-      if (d < coreR) {
-        const t = d / coreR
-        const coreGlow = Math.exp(-((d / coreR) ** 2) * 3)
-        const kr = 147 + (240 - 147) * (1 - t)
-        const kg = 197 + (247 - 197) * (1 - t) // toward near-white at center
-        const kb = 253 + (255 - 253) * (1 - t)
-        const k = Math.min(1, (1 - t) * 2.2 + coreGlow)
-        r += (kr - r) * k
-        g += (kg - g) * k
-        b += (kb - b) * k
+      // ── bot face: two eyes + smile, clipped inside the bubble ──
+      if (dBub < 0) {
+        const dEye = Math.min(sdC(x0 + 58, y0 - 5, 25), sdC(x0 - 58, y0 - 5, 25))
+        const dSmArc = Math.abs(Math.hypot(x0, y0 + 6) - 62)
+        const dSmile = y0 > -6 && Math.abs(x0) < 52 ? dSmArc : 999
+        const dFace = Math.min(dEye, dSmile)
+        const glow = Math.min(1, 0.5 * Math.exp(-(dFace * dFace) / (2 * 24 * 24)))
+        r += (234 - r) * glow * 0.75
+        g += (244 - g) * glow * 0.75
+        b += (255 - b) * glow * 0.75
+        const faceC = cov(dFace)
+        if (faceC > 0) {
+          r += (255 - r) * faceC
+          g += (255 - g) * faceC
+          b += (255 - b) * faceC
+        }
+      }
+
+      // ── crown: band sitting on the bubble + three pearls ──
+      const dCrown = Math.min(
+        sdRB(x0, y0 + 112, 85, 18, 8),
+        Math.min(sdC(x0 + 58, y0 + 140, 18), Math.min(sdC(x0, y0 + 152, 24), sdC(x0 - 58, y0 + 140, 18))),
+      )
+      const crownHalo = 0.5 * Math.exp(-(dCrown * dCrown) / (2 * 30 * 30))
+      r += 150 * crownHalo
+      g += 190 * crownHalo
+      b += 255 * crownHalo
+      const crownC = cov(dCrown)
+      if (crownC > 0) {
+        const shade = 0.82 + 0.18 * Math.max(0, Math.min(1, (y0 + 160) / 45)) // brighter top
+        r += (226 * shade - r) * crownC
+        g += (238 * shade - g) * crownC
+        b += (255 * shade - b) * crownC
       }
 
       const i = (y * size + x) * 4

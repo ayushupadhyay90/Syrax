@@ -166,35 +166,79 @@ const CHAT_KEY = 'syrax-chat-v1'
 const CHAT_MAX = 200
 
 /**
- * Resolve a YouTube search query → a real video id (backend hits YouTube's
- * results page). Needed because YouTube removed `listType=search` embeds —
- * without this the panel would show "video unavailable".
+ * Resolve a YouTube search query → a real video id, PURELY IN THE BROWSER
+ * (static hosting has no backend anymore). Best-effort with a strict budget —
+ * every source can fail; the caller then opens the YouTube results page, so
+ * the tab ALWAYS opens. Sources:
+ *   0. /api/youtube (works in local dev, fast-404s elsewhere),
+ *   1. CORS proxy of YouTube's own results HTML (same top hit the old
+ *      Vercel server returned — matches what the user would click first),
+ *   2. public Invidious API (JSON, CORS-enabled).
  */
 async function resolveVideo(query: string): Promise<string | undefined> {
-  // weak-network resilience: 3 attempts with escalating backoff; a missing
-  // backend (404/405 on static hosting) is permanent — no wasted retries
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const deadline = Date.now() + 4200 // whole budget — never hang the open
+  const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
+  const grab = async (url: string): Promise<Response | undefined> => {
+    const remain = deadline - Date.now()
+    if (remain < 500) return undefined
     const ctrl = new AbortController()
-    const to = window.setTimeout(() => ctrl.abort(), 5000) // never hang the open
+    const to = window.setTimeout(() => ctrl.abort(), remain)
     try {
-      const r = await fetch(`/api/youtube?q=${encodeURIComponent(query)}`, { signal: ctrl.signal })
-      if (r.ok) {
-        const d = (await r.json()) as { ids?: string[] }
-        if (d.ids?.length) {
-          window.clearTimeout(to)
-          return d.ids[0]
-        }
-      } else if (r.status === 404 || r.status === 405) {
-        window.clearTimeout(to)
-        return undefined // no /api here → straight to the results-page fallback
-      }
+      return await fetch(url, { signal: ctrl.signal })
     } catch {
-      /* network hiccup / timeout → escalating retry */
+      return undefined
+    } finally {
+      window.clearTimeout(to)
     }
-    window.clearTimeout(to)
-    if (attempt < 2) await new Promise((res) => setTimeout(res, 600 + attempt * 800))
   }
-  return undefined // backend down → fall back to the YouTube results page
+  const cleanup = (id?: string) => {
+    if (id) return id
+    return undefined
+  }
+
+  // 0) local backend (dev) — one attempt, 404/405 = no backend → move on fast
+  try {
+    const r = await fetch(`/api/youtube?q=${encodeURIComponent(query)}`, {
+      signal: AbortSignal.timeout(1600),
+    })
+    if (r.ok) {
+      const d = (await r.json()) as { ids?: string[] }
+      if (d.ids?.length) return d.ids[0]
+    }
+  } catch {
+    /* static hosting → continue to browser sources */
+  }
+
+  // 1) CORS proxies over the real YouTube results page → top search hit
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(ytUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(ytUrl)}`,
+  ]
+  for (const p of proxies) {
+    const r = await grab(p)
+    if (r?.ok) {
+      const html = await r.text()
+      // "videoRenderer" = an actual search-result item (skips ads/related)
+      const id =
+        html.match(/"videoRenderer":\s*\{\s*"videoId":"([\w-]{11})"/)?.[1] ??
+        html.match(/"videoId":"([\w-]{11})"/)?.[1]
+      if (id) return cleanup(id)
+    }
+  }
+
+  // 2) Invidious public API
+  const iv = await grab(`https://inv.nadeko.net/api/v1/search?q=${encodeURIComponent(query)}&type=video`)
+  if (iv?.ok) {
+    try {
+      const d = (await iv.json()) as { videoId?: string }[]
+      const id = d?.[0]?.videoId
+      if (id) return cleanup(id)
+    } catch {
+      /* malformed → fall through */
+    }
+  }
+
+  return undefined // caller opens the results page — always opens something
 }
 
 /** Shown inside the reserved tab while the real URL is still being decided. */
@@ -273,7 +317,7 @@ export default function Stage() {
     }
   }, [])
 
-  const orbSize = useHeroSize(0.42, 220, 440)
+  const orbSize = useHeroSize(0.42, 150, 440)
   const historyRef = useRef<ChatMessage[]>([])
   const recognizerRef = useRef<SpeechRecognizer | null>(null)
   const micRef = useRef(false)
@@ -1119,23 +1163,23 @@ export default function Stage() {
           '#040711',
       }}
     >
-      {/* ── TOP: SYRAX wordmark ───────────────────────────────────────── */}
-      <header className="hud datastream relative flex items-center justify-between border-b border-[#3B82F6]/20 bg-[#3B82F6]/[0.03] px-6 py-2.5">
-        <div className="w-44 text-[10px] tracking-[0.25em] text-[#3B82F6]/50 uppercase">SYRAX — Mark 1</div>
+      {/* ── TOP: SYRAX wordmark — wraps to two tidy rows on phones ──────── */}
+      <header className="hud datastream relative flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[#3B82F6]/20 bg-[#3B82F6]/[0.03] px-4 py-2.5 sm:px-6">
+        <div className="order-2 w-auto text-[10px] tracking-[0.25em] text-[#3B82F6]/50 uppercase sm:order-1 sm:w-44">SYRAX — Mark 1</div>
 
         {/* hero wordmark — bold, glowing, unmistakably Syrax */}
-        <div className="pointer-events-none relative flex flex-col items-center justify-center">
+        <div className="pointer-events-none relative order-1 flex w-full flex-col items-center justify-center sm:order-2 sm:w-auto">
           <div className="relative">
             {/* blue bloom behind the letters */}
             <span
               aria-hidden
-              className="absolute inset-0 animate-[micring_3.2s_ease-in-out_infinite] text-[68px] font-black tracking-[0.42em] text-[#3B82F6] blur-2xl opacity-45 select-none"
+              className="absolute inset-0 animate-[micring_3.2s_ease-in-out_infinite] text-[44px] font-black tracking-[0.42em] text-[#3B82F6] blur-2xl opacity-45 select-none sm:text-[68px]"
               style={{ lineHeight: 1 }}
             >
               SYRAX
             </span>
             <h1
-              className="relative text-[68px] leading-none font-black tracking-[0.42em] text-transparent select-none"
+              className="relative text-[44px] leading-none font-black tracking-[0.42em] text-transparent select-none sm:text-[68px]"
               style={{
                 background: 'linear-gradient(180deg, #ffffff 8%, #CFE3FF 38%, #3B82F6 72%, #1E40AF 100%)',
                 WebkitBackgroundClip: 'text',
@@ -1152,7 +1196,7 @@ export default function Stage() {
           </span>
         </div>
 
-        <div className="flex w-44 justify-end">
+        <div className="order-3 flex w-auto justify-end sm:w-44">
           <span className={`flex items-center gap-2 rounded-full border border-[#3B82F6]/40 bg-[#3B82F6]/[0.07] px-3 py-1 text-[10px] tracking-widest uppercase text-slate-300`}>
             <span className={`h-1.5 w-1.5 rounded-full ${meta.dot} ${meta.pulse}`} />
             {meta.label}
@@ -1160,8 +1204,8 @@ export default function Stage() {
         </div>
       </header>
 
-      {/* ── MAIN: operations | orb | chat ─────────────────────────────── */}
-      <div className="grid min-h-0 grid-cols-[minmax(200px,250px)_1fr_minmax(260px,330px)] gap-3 p-3">
+      {/* ── MAIN: operations | orb | chat — stacks & scrolls on phones ─── */}
+      <div className="grid min-h-0 grid-cols-1 gap-3 overflow-x-hidden overflow-y-auto p-3 lg:grid-cols-[minmax(200px,250px)_1fr_minmax(260px,330px)] lg:overflow-visible">
         {/* LEFT: operations */}
         <aside className="flex min-h-0 flex-col gap-3">
           <div className="hud hud-panel panel-glow flex min-h-0 flex-1 flex-col rounded-2xl border border-[#3B82F6]/18 bg-[#3B82F6]/[0.045] backdrop-blur-sm">
@@ -1169,7 +1213,7 @@ export default function Stage() {
               <h2 className="text-[10px] font-semibold tracking-[0.25em] text-[#3B82F6] uppercase">Operations</h2>
               <p className="mt-0.5 text-[11px] text-[#3B82F6]/50">Click one, or ask by voice</p>
             </header>
-            <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto p-2.5">
+            <div className="flex max-h-[34vh] flex-1 flex-col gap-1.5 overflow-y-auto p-2.5 lg:max-h-none">
               {OPERATIONS.map((op) => {
                 const active = activeOp === op.id
                 return (
@@ -1321,7 +1365,7 @@ export default function Stage() {
             </button>
           </header>
 
-          <div ref={chatRef} className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
+          <div ref={chatRef} className="flex max-h-[46vh] min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3 lg:max-h-none">
             {messages.map((m, i) => (
               <div
                 key={i}
