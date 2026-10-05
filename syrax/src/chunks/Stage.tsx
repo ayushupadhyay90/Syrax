@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { OrbState } from 'thinking-orbs'
 import { OrbCanvas, useHeroSize } from './Chunk1'
 import { SpeechRecognizer } from '../voice/stt'
+import { micLevel } from '../voice/level'
 import { speak, stopSpeaking } from '../voice/tts'
 import { askSyrax, localIntent, cleanSongTitle, hasDSKey, setDSKey, type ChatMessage, type AgentCommand } from '../ai/syrax'
 import { ABOUT_SPOKEN, ABOUT_TEXT, ABOUT_INTRO, ABOUT_PUNCHLINE, ABOUT_OPERATIONS } from '../ai/about'
@@ -257,8 +258,10 @@ const SPLASH_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Syr
 <body style="margin:0;height:100vh;display:grid;place-items:center;background:#040711;color:#3B82F6;font-family:system-ui,sans-serif">
 <div style="text-align:center">
 <div style="font-size:30px;font-weight:900;letter-spacing:.42em;color:#fff;text-shadow:0 0 26px rgba(59,130,246,.85)">SYRAX</div>
-<div style="margin-top:12px;font-size:11px;letter-spacing:.34em;color:#93C5FD">OPENING…</div>
+<div style="margin-top:12px;font-size:11px;letter-spacing:.34em;color:#93C5FD">LISTENING — SAY YOUR COMMAND</div>
+<div style="margin-top:6px;font-size:10px;letter-spacing:.12em;color:#3B82F6">this tab opens your result</div>
 </div>
+<script>var back=function(){try{window.opener&&window.opener.focus()}catch(e){}};back();setTimeout(back,700);setTimeout(back,1800);</script>
 </body></html>`
 
 export default function Stage() {
@@ -348,6 +351,9 @@ export default function Stage() {
   const openedTabs = useRef<{ w: Window; kind: 'youtube' | 'google' }[]>([])
   /** Consecutive STT network drops — auto-reconnect before giving up. */
   const netRetries = useRef(0)
+  /** STT silence watchdog — last transcript activity + heal attempts. */
+  const lastSttAt = useRef(Date.now())
+  const sttHeals = useRef(0)
   /** The 🔑 setup card has been shown once — never nag again. */
   const keyNagged = useRef(false)
   /** Tab reserved WHILE the imperative phrase streams in — Chrome only honours
@@ -530,6 +536,13 @@ export default function Stage() {
    *  popup-proof — afterwards we only navigate it, which is never blocked. */
   function reserveNow() {
     if (reservedTab.current) return
+    // PHONE: a reserved splash opens in the FOREGROUND and strands the user
+    // on it — Chrome Android hands the new tab focus and won't give it back,
+    // so the backgrounded page's STT goes quiet → "animation and nothing
+    // else". Mobile opens the real tab at command time instead (Chrome
+    // Android doesn't apply desktop-style popup blocking); if it ever does
+    // block, openTab's always-working "Open ↗" guide takes over.
+    if (IS_PHONE) return
     // A tab is already open → commands REUSE it (the user asked for "the
     // particular tab") — a splash would just flash open and get closed again.
     if (
@@ -560,6 +573,16 @@ export default function Stage() {
     } catch {
       /* focus denied → the tab still opened */
     }
+    // some browsers hand foreground to the new tab a beat LATER — yank back
+    // twice so the Syrax tab (and its STT) never sits in the background
+    for (const ms of [600, 1600])
+      window.setTimeout(() => {
+        try {
+          window.focus()
+        } catch {
+          /* denied */
+        }
+      }, ms)
     reservedTab.current = w
     armReserveTimer()
   }
@@ -613,6 +636,9 @@ export default function Stage() {
         const clean = normalizeName(t)
         setInterim(clean)
         setStatus(`“${clean}”`)
+        lastSttAt.current = Date.now()
+        sttHeals.current = 0
+        if (document.hidden) window.focus() // STT must run on the foreground tab
         reserveImperative(clean) // grab the tab while the gesture window is open
         // still talking → push the pending flush back (Chrome can finalise a
         // clause while the sentence continues; this is the "incomplete
@@ -621,6 +647,8 @@ export default function Stage() {
       },
       onFinal: (text) => {
         netRetries.current = 0 // healthy again — reset the reconnect budget
+        lastSttAt.current = Date.now()
+        sttHeals.current = 0
         finalBuf.current = finalBuf.current ? `${finalBuf.current} ${text}` : text
         const full = finalBuf.current.trim()
         reserveImperative(full)
@@ -755,6 +783,57 @@ export default function Stage() {
     }, 3000)
     return () => window.clearInterval(t)
   }, [nowPlaying])
+
+  // STT SILENCE WATCHDOG — the mic can LOOK alive (rings on, splash open)
+  // while Chrome's speech service delivers nothing (start raced, service
+  // hung, tab lost focus). If the user IS speaking (level meter) but no
+  // transcript lands for 6s → restart recognition; after two failed heals →
+  // say it OUT LOUD instead of leaving an "OPENING…" tab with no result
+  // ever coming (the "animation and nothing else" complaint).
+  useEffect(() => {
+    if (!micOn) return
+    const t = window.setInterval(() => {
+      if (!micRef.current) return
+      if (Date.now() - lastSttAt.current < 6000) return
+      if (micLevel.value < 0.15) {
+        lastSttAt.current = Date.now() // nobody is talking — silence is normal
+        return
+      }
+      if (sttHeals.current < 2) {
+        sttHeals.current += 1
+        lastSttAt.current = Date.now()
+        setStatus('Reconnecting the listener…')
+        try {
+          recognizerRef.current?.stop()
+        } catch {
+          /* already gone */
+        }
+        window.setTimeout(() => {
+          if (!micRef.current) return
+          void recognizerRef.current?.start().then(() => {
+            lastSttAt.current = Date.now()
+          })
+        }, 350)
+        return
+      }
+      // two restarts + still nothing while they speak → be honest, never hang
+      micRef.current = false
+      setMicOn(false)
+      setPhase('idle')
+      try {
+        recognizerRef.current?.stop()
+      } catch {
+        /* already gone */
+      }
+      closeReserve()
+      setStatus('Can’t hear you — type the command')
+      say(
+        'syrax',
+        'The mic is on but your words aren’t reaching me — Chrome’s speech service isn’t responding. Check the 🎤 permission for this site, tap the mic to retry, or type the command instead.',
+      )
+    }, 2000)
+    return () => window.clearInterval(t)
+  }, [micOn])
 
   /**
    * Speak a reply. ONE-SHOT model (user request): the mic ALWAYS ends off —
@@ -1179,7 +1258,25 @@ export default function Stage() {
           setStatus('Microphone blocked — use the Retry button below')
           return
         }
-        void recognizerRef.current?.start()
+        try {
+          await recognizerRef.current?.start()
+        } catch {
+          /* start raced — the isActive check below reports it honestly */
+        }
+        // a DEAD start must never fake "Listening…" — that is exactly the
+        // "animation and nothing else" bug (splash + rings, zero results)
+        if (!recognizerRef.current?.isActive) {
+          closeReserve()
+          setPhase('idle')
+          setStatus('Speech service did not start — tap the mic to retry')
+          say(
+            'syrax',
+            'The speech service didn’t start — tap the mic once more, or type your command instead.',
+          )
+          return
+        }
+        lastSttAt.current = Date.now()
+        sttHeals.current = 0
         micRef.current = true
         setMicOn(true)
         setPhase('listening')
