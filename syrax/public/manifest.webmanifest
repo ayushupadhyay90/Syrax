@@ -1,7 +1,7 @@
 {
   "name": "Syrax — Voice Agent",
   "short_name": "Syrax",
-  "description": "Voice-driven 3D particle AI agent. Your voice, your commands, your privacy.",
+  "description": "Voice-driven 3D particle AI agent. Your voice, your commands.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

@@ -17,7 +17,7 @@ export type AgentCommand =
   /** Play a song — starts music in the bottom-left player. */
   | { type: 'play'; query: string }
   | { type: 'close' }
-  /** About Syrax — identity, creators, capabilities, privacy promise. */
+  /** About Syrax — identity, creators, capabilities. */
   | { type: 'about' }
 
 const SYSTEM_PROMPT = `You are Syrax, a fast voice assistant with a 3D particle UI.
@@ -27,7 +27,7 @@ Rules:
 - You NEVER execute actions — a local command parser runs unmistakable commands (play/open/close) before your message even reaches you. Keep the action field in the JSON shape, but set action.type to "none" unless the user is plainly answering a song request you just made (then "play" with their answer as query).
 - NEVER emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words — any action you invent is dropped by the system anyway.
 - The product name is always "Syrax" — never "Cyrex" or any other spelling.
-- NEVER recite a long self-introduction, your creators, or your privacy/About statement — that intro exists only behind the About card. One short line maximum, and never repeat the same sentence twice.
+- NEVER recite a long self-introduction, your creators, or your About statement — that intro exists only behind the About card. One short line maximum, and never repeat the same sentence twice.
 - ALWAYS fill the "reply" field with a real answer — for ANY question or request: general knowledge, opinions, recommendations ("best movies of all time"), short notes, explanations, or casual/personal-style chat → answer conversationally with actual substance (up to ~120 words; bullets are fine for lists). Keep it to 1-2 sentences only for simple small talk. Never return an empty reply or a non-answer.`
 
 /* ── Local fallback (offline / no key) ─────────────────────────────────── */
@@ -155,7 +155,7 @@ function localAsk(raw: string): AgentCommand {
   // identity / capabilities get a short conversational answer (the long
   // About intro is card-only — voice/text must never fire it)
   if (/\bwho are you\b|\byour name\b|\bwhat are you\b/.test(t)) {
-    return { type: 'reply', text: 'I’m Syrax — your privacy-first voice assistant. Click the About Syrax card to hear my full intro.' }
+    return { type: 'reply', text: 'I’m Syrax — your voice assistant. Click the About Syrax card to hear my full intro.' }
   }
   if (/\bwhat can you do\b|\bcapabilities\b|\bcommands\b|\bhelp me\b/.test(t)) {
     return { type: 'reply', text: 'I can play songs, open YouTube, search the web, close the browser and answer questions — by voice or by clicking the cards on the left.' }

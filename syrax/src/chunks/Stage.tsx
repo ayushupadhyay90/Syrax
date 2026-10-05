@@ -102,7 +102,7 @@ function pick<T>(arr: T[]): T {
 /** Distinct spoken line (varied per call) + on-screen status for every operation. */
 function describe(cmd: AgentCommand): { say: string; status: string } {
   if (cmd.type === 'about') {
-    return { say: ABOUT_SPOKEN, status: '🛡️ About Syrax — privacy-first voice AI' }
+    return { say: ABOUT_SPOKEN, status: '🛡️ About Syrax — your voice AI' }
   }
   if (cmd.type === 'play') {
     const q = cmd.query || 'some music'
@@ -409,14 +409,24 @@ export default function Stage() {
   const normalizeName = (text: string) =>
     text.replace(/\b(cyrex|cyrax|syrex|sirex|zyrax|syracs|sirax|zirex|syrx)\b/gi, 'Syrax')
 
-  /** Retry after blocking: re-requests the mic and reports what's wrong. */
+  /** Retry after blocking: re-requests the mic — on success go STRAIGHT into
+   *  listening (no extra tap), on failure say exactly why + how to fix it. */
   async function retryMic() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       stream.getTracks().forEach((t) => t.stop())
       setMicBlocked(false)
-      setStatus('Mic ready — tap the mic')
-      say('syrax', 'Microphone access restored — tap the mic and talk to me.')
+      say('syrax', 'Microphone unlocked — go ahead and speak.')
+      setStatus('Listening… go ahead')
+      setInterim('')
+      setPhase('listening')
+      setMicOn(true)
+      micRef.current = true
+      try {
+        void recognizerRef.current?.start()
+      } catch {
+        /* recognizer already running → we are listening anyway */
+      }
     } catch (e) {
       const name = (e as DOMException)?.name ?? ''
       if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
@@ -427,12 +437,7 @@ export default function Stage() {
             : 'No microphone was found — check Windows Settings → Sound → Input, or plug in your mic, then tap Retry again.',
         )
       } else {
-        say(
-          'syrax',
-          IS_PHONE
-            ? 'Still blocked — tap the ⓘ icon at the left of the address bar → Permissions → Microphone → Allow, then tap Retry. (Or Chrome ⋮ → Settings → Site settings → Microphone.)'
-            : 'Still blocked — click the 🎤 icon in the address bar → set it to “Allow” → tap Retry. On Windows also check Settings → Privacy → Microphone → On.',
-        )
+        say('syrax', await micBlockedAdvice())
       }
     }
   }
@@ -811,6 +816,42 @@ export default function Stage() {
     say('syrax', 'Stopped.') // chat only — never SPEAK after "stop"
   }
 
+  /** Honest "why is the mic blocked" copy. Per-site denial → exact steps to
+   *  un-block it; a session that denies EVERY permission (embedded preview
+   *  browsers) → say so plainly and point at the working typed fallback. */
+  async function micBlockedAdvice(): Promise<string> {
+    let state = 'unknown'
+    try {
+      state = (await navigator.permissions.query({ name: 'microphone' })).state
+    } catch {
+      /* Permissions API unsupported */
+    }
+    if (state !== 'denied') {
+      return IS_PHONE
+        ? 'Mic access was blocked — tap the ⓘ icon at the left of the address bar → Permissions → Microphone → Allow, then tap Retry below.'
+        : 'Mic access was blocked — click the 🎤 icon in the address bar, allow the microphone, then tap Retry below.'
+    }
+    // denied: site-level block (user-fixable) vs a session that denies everything?
+    let allDenied = true
+    for (const n of ['notifications', 'geolocation', 'camera'] as const) {
+      try {
+        if ((await navigator.permissions.query({ name: n })).state !== 'denied') {
+          allDenied = false
+          break
+        }
+      } catch {
+        allDenied = false
+        break
+      }
+    }
+    if (allDenied) {
+      return "This browser session blocks ALL microphone access, so voice can't be enabled here. Type your commands instead — everything else works (voice works in normal Chrome and the installed Syrax app)."
+    }
+    return IS_PHONE
+      ? 'The mic permission for this site is set to DENIED. Open Chrome ⋮ → Settings → Site settings → Microphone → find this site → switch to Allow → tap Retry below.'
+      : `The mic permission for this site is set to DENIED. Paste chrome://settings/content/siteDetails?site=${location.host} into Chrome's address bar → Microphone → Allow → tap Retry below.`
+  }
+
   /** Ask for the mic BEFORE recognition starts → the browser shows its normal
    *  prompt up front instead of a cryptic "blocked" error mid-task. */
   async function ensureMicPermission(): Promise<boolean> {
@@ -821,18 +862,17 @@ export default function Stage() {
       return true
     } catch {
       setMicBlocked(true)
+      const advice = await micBlockedAdvice()
       setMessages((m) =>
-        m.some((x) => x.text.startsWith('Mic access was blocked') || x.text.startsWith('Your microphone is blocked'))
+        m.some(
+          (x) =>
+            x.text.startsWith('Mic access was blocked') ||
+            x.text.startsWith('Your microphone is blocked') ||
+            x.text.startsWith('The mic permission for this site') ||
+            x.text.startsWith('This browser session blocks'),
+        )
           ? m
-          : [
-              ...m,
-              {
-                who: 'syrax' as const,
-                text: IS_PHONE
-                  ? 'Mic access was blocked — tap the ⓘ icon at the left of the address bar → Permissions → Microphone → Allow, then tap Retry below.'
-                  : 'Mic access was blocked — click the 🎤 icon in the address bar, allow the microphone, then tap Retry below.',
-              },
-            ],
+          : [...m, { who: 'syrax' as const, text: advice }],
       )
       return false
     }
@@ -1491,7 +1531,7 @@ export default function Stage() {
                 SYRAX
               </h2>
               <p className="mt-1 text-[10px] tracking-[0.42em] text-[#3B82F6]/80 uppercase" style={{ paddingLeft: '0.42em' }}>
-                your privacy-first voice ai
+                your voice ai assistant
               </p>
             </div>
 
