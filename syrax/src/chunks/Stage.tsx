@@ -893,12 +893,23 @@ export default function Stage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const runIdRef = useRef(0)
 
-  /** "stop syrax" / "shut up" / bare "stop" → halt everything, immediately. */
-  const isHalt = (t: string) =>
-    /^(stop|halt|cancel|pause)\s*(syrax|syrex|cyrex)?\s*[.!?]*$/.test(t) ||
-    /^(shut up|be quiet|quiet|silence|enough|that'?s enough|stop talking|stop responding|stop speaking|stop listening|stop searching|stop thinking|stop everything)[.!?]*$/.test(
-      t,
+  /** "stop syrax" / "shut up" / bare "stop" → halt everything, immediately.
+   *  Openers/wake words are stripped first so "Okay stop syrax", "hey shut up"
+   *  and "please stop" halt too — before, they fell through as non-matches. */
+  const isHalt = (raw: string) => {
+    const t = raw
+      .toLowerCase()
+      .trim()
+      .replace(/^(?:(?:hey|hi|ok|okay|yo|please|just|so|well)[,\s]+)+/, '')
+      .replace(/^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+      .trim()
+    return (
+      /^(stop|halt|cancel|pause)\s*(syrax|syrex|cyrex)?\s*[.!?]*$/.test(t) ||
+      /^(shut up|be quiet|quiet|silence|enough|that'?s enough|stop talking|stop responding|stop speaking|stop listening|stop searching|stop thinking|stop everything)[.!?]*$/.test(
+        t,
+      )
     )
+  }
 
   function haltAll() {
     runIdRef.current += 1 // drop any in-flight LLM reply or pending search

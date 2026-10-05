@@ -26,6 +26,7 @@ Always respond with a single JSON object, no markdown, in this exact shape:
 Rules:
 - You NEVER execute actions — a local command parser runs unmistakable commands (play/open/close) before your message even reaches you. Keep the action field in the JSON shape, but set action.type to "none" unless the user is plainly answering a song request you just made (then "play" with their answer as query).
 - NEVER emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words — any action you invent is dropped by the system anyway.
+- NEVER narrate an action as if it already happened — no "Opening…", "Playing…", "Pulling up…", "I've opened…". You cannot perform actions. If the user is clearly commanding an open/play/search action, reply with ONE short line giving the exact clear phrase to use (for example: "Say it as one clear command — open YouTube.") and nothing more.
 - The product name is always "Syrax" — never "Cyrex" or any other spelling.
 - Identity questions get a DIRECT, clear answer — these facts are safe to state briefly: created by Navam; built with React + Vite, Tailwind CSS, Three.js (3D particle field), Web Speech API (speech recognition + text-to-speech), DeepSeek deepseek-flash (the language model), hosted as an installable PWA on GitHub Pages; theme electric blue #3B82F6 on near-black; voice commands open REAL browser tabs; the mic is one-shot and only clear commands execute (you never execute actions yourself).
 - Style: refined and clear — lead with the direct answer, then at most one short supporting sentence. Plain text only (no markdown, no emojis), no filler ("certainly", "great question"), never repeat yourself or restate the question. Numbered lines only when the user asks for a list.
@@ -89,14 +90,25 @@ export function cleanSongTitle(raw: string): string {
 }
 
 export function localIntent(raw: string): AgentCommand | null {
-  // strip wake words — including how STT mishears us ("cyrex", "syrex"…) —
-  // then polite openers: "can you play X" / "please open youtube" are still
-  // clear commands ("will play later" stays untouched: "you" is required)
-  const t = raw
-    .toLowerCase()
-    .trim()
-    .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
-    .replace(/^(?:(?:can|could|would|will)\s+you\s+(?:to\s+)?|(?:please|just|kindly)\s+)+/, '')
+  // Strip, IN ANY ORDER/INTERLEAVING: conversational openers ("okay", "hey",
+  // "so"…), wake words incl. STT mishearings ("cyrex", "syrex"…), and polite
+  // prefixes. REAL BUG: bare "Okay open YouTube" used to survive stripping
+  // (the old opener group REQUIRED a wake word after it), no start-anchored
+  // rule matched, and the reply fell through to the chat AI — which TALKED
+  // about opening instead of doing it.
+  let t = raw.toLowerCase().trim()
+  for (let i = 0; i < 3 && t; i++) {
+    const before = t
+    t = t
+      .replace(
+        /^(?:(?:hey|hi|hello|yo|ok|okay|alright|all right|yeah|yep|yup|sure|so|well|um|uh|please|just|kindly)[,\s]+)+/,
+        '',
+      )
+      .replace(/^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+      .replace(/^(?:(?:can|could|would|will)\s+you\s+(?:to\s+)?)+/, '')
+      .trim()
+    if (t === before) break
+  }
   if (!t) return null
 
   // ── safety rails: NEVER act on questions, negations, or hypotheticals ──
@@ -114,7 +126,21 @@ export function localIntent(raw: string): AgentCommand | null {
     t.match(/^(?:play|put on|stream|listen to)\s+(?:me\s+)?(.+)/) ??
     t.match(/^start\s+(?:the\s+)?(?:some\s+)?(?:music|song|songs|playlist|video|track)s?\s*(?:of\s+|for\s+)?(.*)/)
   if (playMatch) {
-    const q = playMatch[1]
+    const full = playMatch[1]
+    // "play any random video/song" = "play me ANYTHING" → a trending hit,
+    // never the which-song? prompt and never the literal words
+    if (/^(?:(?:any|some|a|the)\s+)*random\b/.test(full.trim())) {
+      return { type: 'play', query: 'trending music video' }
+    }
+    let core = full
+    // "any popular song by ARTIST" → the ARTIST after "by" becomes the query
+    // (guard: the words before "by" must be song-qualifiers, so the real
+    // title "stand by me" survives untouched)
+    const byM = core.match(/^(.+?)\s+by\s+(.+)$/)
+    if (byM && /\b(?:song|songs|music|track|tracks|album|any|some|popular|best|hit|hits|favorite|latest|new)\b/.test(byM[1])) {
+      core = byM[2]
+    }
+    const q = core
       // strip filler words, then leading articles: "play a song" → "" (Stage
       // then ASKS which song), "play the weeknd" → "weeknd", and generic
       // placeholders too — "play this video" must ASK, never search the
@@ -126,9 +152,11 @@ export function localIntent(raw: string): AgentCommand | null {
       .replace(/^(?:by|from)\s+/i, '')
       .replace(/\s+/g, ' ')
       .trim()
+    // STT hears "weekend" for The Weeknd constantly → fix the mishearing
+    const fixed = q === 'weekend' ? 'the weeknd' : q
     // "play a song by this person" (no real name in the phrase) → still a question
-    if (/^(?:this|that)\s+(?:person|guy|artist|singer)$/.test(q)) return { type: 'play', query: '' }
-    return { type: 'play', query: q } // empty → Stage asks "which song?"
+    if (/^(?:this|that)\s+(?:person|guy|artist|singer)$/.test(fixed)) return { type: 'play', query: '' }
+    return { type: 'play', query: fixed } // empty → Stage asks "which song?"
   }
 
   // "open youtube and play X" → DIRECT playback in a real tab (the play
@@ -153,10 +181,10 @@ export function localIntent(raw: string): AgentCommand | null {
   // open a google tab / search / google … — anchored + word-boundary on "tab"
   // ("table", "cabinet" must never open a browser tab)
   const g =
-    t.match(/^(?:open\s+)?(?:a\s+)?(?:new\s+)?tabs?\b\s*(?:and\s*(.*))?/) ??
+    t.match(/^(?:open\s+)?(?:a\s+|an\s+|the\s+|our\s+|my\s+|your\s+|another\s+|new\s+|up\s+)*tabs?\b\s*(?:and\s*(.*))?/) ??
     // "open google" / "open a google tab" — bare OR chained:
     // "open google and search for cats" → cats, in that tab
-    t.match(/^(?:open\s+)?(?:a\s+)?(?:new\s+)?google\s*(?:tab)?(?:\s+and\s+(.*))?$/) ??
+    t.match(/^(?:open\s+)?(?:a\s+|an\s+|the\s+|our\s+|my\s+|your\s+|another\s+|new\s+)*google\s*(?:tab)?(?:\s+and\s+(.*))?$/) ??
     t.match(/^(?:open\s+)?(?:google|search|look up|find)\s+(?:for\s+)?(.+)/)
   if (g) {
     const q = cleanQuery(g[1] ?? '') || 'news today'
@@ -168,6 +196,16 @@ export function localIntent(raw: string): AgentCommand | null {
     // tab already open instead of stacking another one
     const explicit = /^(?:open\s+)?(?:a\s+)?(?:new\s+)?google\b/.test(t)
     return { type: 'open', target: 'google', query: q, ...(explicit ? { explicit: true } : {}) }
+  }
+
+  // command-shaped, but the parser couldn't make sense of it ("open the
+  // fridge") → honest LOCAL guidance instead of letting the chat AI dream up
+  // a fake "Opening…" reply it has no way to perform
+  if (/^(?:open|play|search|find|look up|put on|stream|listen to)\b/.test(t)) {
+    return {
+      type: 'reply',
+      text: 'I didn’t catch that as one clear command — say it as a single line, like “open YouTube”, “search for cats” or “play a song”.',
+    }
   }
 
   return null
