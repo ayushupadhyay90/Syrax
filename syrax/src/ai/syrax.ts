@@ -27,8 +27,10 @@ Rules:
 - You NEVER execute actions — a local command parser runs unmistakable commands (play/open/close) before your message even reaches you. Keep the action field in the JSON shape, but set action.type to "none" unless the user is plainly answering a song request you just made (then "play" with their answer as query).
 - NEVER emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words — any action you invent is dropped by the system anyway.
 - The product name is always "Syrax" — never "Cyrex" or any other spelling.
-- NEVER recite a long self-introduction, your creators, or your About statement — that intro exists only behind the About card. One short line maximum, and never repeat the same sentence twice.
-- ALWAYS fill the "reply" field with a real answer — for ANY question or request: general knowledge, opinions, recommendations ("best movies of all time"), short notes, explanations, or casual/personal-style chat → answer conversationally with actual substance (up to ~120 words; bullets are fine for lists). Keep it to 1-2 sentences only for simple small talk. Never return an empty reply or a non-answer.`
+- Identity questions get a DIRECT, clear answer — these facts are safe to state briefly: created by Navam; built with React + Vite, Tailwind CSS, Three.js (3D particle field), Web Speech API (speech recognition + text-to-speech), DeepSeek deepseek-flash (the language model), hosted as an installable PWA on GitHub Pages; theme electric blue #3B82F6 on near-black; voice commands open REAL browser tabs; the mic is one-shot and only clear commands execute (you never execute actions yourself).
+- Style: refined and clear — lead with the direct answer, then at most one short supporting sentence. Plain text only (no markdown, no emojis), no filler ("certainly", "great question"), never repeat yourself or restate the question. Numbered lines only when the user asks for a list.
+- The long personal About intro stays card-only: never recite it as a whole — one short line max — EXCEPT the identity facts above, which you SHOULD state briefly when asked directly.
+- ALWAYS fill the "reply" field with a real answer — for ANY question or request: general knowledge, opinions, recommendations ("best movies of all time"), short notes, explanations, or casual/personal-style chat → answer conversationally with actual substance (up to ~120 words; plain numbered lines are fine for lists). Keep it to 1-2 sentences only for simple small talk. Never return an empty reply or a non-answer.`
 
 /* ── Local fallback (offline / no key) ─────────────────────────────────── */
 
@@ -114,12 +116,31 @@ export function localIntent(raw: string): AgentCommand | null {
   if (playMatch) {
     const q = playMatch[1]
       // strip filler words, then leading articles: "play a song" → "" (Stage
-      // then ASKS which song), "play the weeknd" → "weeknd"
-      .replace(/\b(song|songs|music|track|tracks|album|for me|please|now|on youtube|it)\b/g, '')
-      .replace(/^(a|an|the|some|any|that|this)\s+/, '')
+      // then ASKS which song), "play the weeknd" → "weeknd", and generic
+      // placeholders too — "play this video" must ASK, never search the
+      // literal words "this video"
+      .replace(/\b(song|songs|music|track|tracks|album|video|videos|for me|please|now|on youtube|it|something|whatever|random)\b/g, '')
+      .replace(/^(?:a|an|the|some|any|that|this)\s+/, '')
+      // "play a song by Arijit Singh" → "arijit singh" — the ARTIST matters,
+      // the words "song by" don't (plays on YouTube, never asks here)
+      .replace(/^(?:by|from)\s+/i, '')
       .replace(/\s+/g, ' ')
       .trim()
+    // "play a song by this person" (no real name in the phrase) → still a question
+    if (/^(?:this|that)\s+(?:person|guy|artist|singer)$/.test(q)) return { type: 'play', query: '' }
     return { type: 'play', query: q } // empty → Stage asks "which song?"
+  }
+
+  // "open youtube and play X" → DIRECT playback in a real tab (the play
+  // branch), never a YouTube results page; "…and play this video" with no
+  // specific title → empty query → Stage asks which song
+  const ytPlay = t.match(
+    /^(?:open|show|launch|go to)\s+(?:up\s+)?(?:the\s+)?(?:youtube|you tube)\s+and\s+(?:play|put on|stream)\s+(.+)/,
+  )
+  if (ytPlay) {
+    let raw = ytPlay[1].trim()
+    if (/^(?:this|that|the)\s+(?:video|song|one)$/i.test(raw)) raw = ''
+    return { type: 'play', query: cleanQuery(raw) }
   }
 
   // open youtube (with or without query) — anchored; "…and search for X" /
@@ -185,6 +206,54 @@ function localAsk(raw: string): AgentCommand {
 
 export function offlineReply(): AgentCommand {
   return { type: 'reply', text: rotate(OFFLINE_CHATTER) }
+}
+
+/** Identity / project facts — answered LOCALLY (instant, works with NO key,
+ *  never dodged) BEFORE the LLM: "who made you", "what tech stack", model,
+ *  hosting, privacy. STT garbles ("tax tax" = "tech stack") are covered. */
+function identityReply(raw: string): string | null {
+  const t = raw
+    .toLowerCase()
+    .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+    .replace(/[?.!,]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  // who made/created/built you (or Syrax)
+  if (
+    /\b(?:who|whom)\b.*\b(?:made|created|built|developed|designed|coded)\b/.test(t) ||
+    /\b(?:your|the)\s+(?:creator|maker|developer|author|founder|owner)\b/.test(t)
+  ) {
+    return 'Navam created me — I’m Syrax, Mark 1, a voice-driven 3D web assistant.'
+  }
+
+  // tech stack / how you were built
+  const asksSelf = /\b(?:you|your|you're|syrax|this (?:app|site|project|thing))\b/.test(t)
+  if (
+    /\b(?:tax\s*tax|tech\s*stack|techstack)\b/.test(t) ||
+    (asksSelf && /\b(?:stack|tools|languages|frameworks?|technologies)\b/.test(t)) ||
+    /\b(?:built|made|created|developed|designed)\s+(?:with|using|on|in|from)\b/.test(t) ||
+    /\bwhat\s+(?:tech|technology)\b/.test(t)
+  ) {
+    return 'Built with React and Vite, Tailwind CSS for styling, Three.js for the 3D particle field, the Web Speech API for voice, DeepSeek’s deepseek-flash as the brain, and hosted free as an installable PWA on GitHub Pages — all by Navam.'
+  }
+
+  // which AI model runs you
+  if (/\b(?:which|what)\s+(?:model|llm|ai model)\b/.test(t) || /\bdeepseek\b/.test(t) || /\bchatgpt\b|\bgpt\b|\bopenai\b/.test(t)) {
+    return 'My brain runs on DeepSeek — the deepseek-flash model — called straight from your browser with your own key.'
+  }
+
+  // where you live / how to install
+  if (/\bwhere\b.*\b(?:hosted|host|live|running|deployed|saved)\b/.test(t) || /\bgithub pages\b/.test(t)) {
+    return 'I live on GitHub Pages at ayushupadhyay90.github.io/Syrax — open it in Chrome and use Add to Home screen to install me on desktop or Android.'
+  }
+
+  // privacy — honest, no claims we can't keep
+  if (/\b(?:privacy|private|do you (?:store|save|keep|record)|is this (?:secure|safe)|tracking)\b/.test(t)) {
+    return 'Straight answer: your messages go to DeepSeek’s API to get replies, so no — I won’t pretend otherwise. Your API key stays only on this device, the repo has no secrets, and the mic is one-shot: it never keeps listening after a command.'
+  }
+
+  return null
 }
 
 /* ── Brain call ────────────────────────────────────────────────────────── */
@@ -287,6 +356,10 @@ export async function askSyrax(history: ChatMessage[]): Promise<AgentCommand> {
   // ZERO network latency. Only questions wait for the LLM.
   const local = localIntent(lastUser)
   if (local) return local
+
+  // identity / project facts first — instant, keyless, never garbled by the LLM
+  const ident = identityReply(lastUser)
+  if (ident) return { type: 'reply', text: ident }
 
   const msgs: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },

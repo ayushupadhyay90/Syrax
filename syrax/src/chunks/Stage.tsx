@@ -346,6 +346,8 @@ export default function Stage() {
   /** STT silence watchdog — last transcript activity + heal attempts. */
   const lastSttAt = useRef(Date.now())
   const sttHeals = useRef(0)
+  /** Blocked-tab retry: next trusted tap/keydown anywhere re-opens it. */
+  const openRetryFn = useRef<((e: Event) => void) | null>(null)
   /** The 🔑 setup card has been shown once — never nag again. */
   const keyNagged = useRef(false)
   /** Tab reserved WHILE the imperative phrase streams in — Chrome only honours
@@ -447,10 +449,38 @@ export default function Stage() {
     say(
       'syrax',
       first
-        ? `The browser blocked the new tab — that's its popup blocker. One-time fix: click the 🚫 “Popup blocked” badge next to the address bar → “Always allow pop-ups from this site” → Done. (Heads-up: this permission is saved PER SITE ADDRESS — allowing it on another site doesn't carry over. In the installed Syrax app, use ⋮ → Settings → Site settings → Pop-ups and redirects.) For now tap “Open ↗” below to go to ${label} now.`
-        : `Popup still blocked — tap “Open ↗” below to open ${label} now (the one-time fix above makes it permanent).`,
+        ? `The browser blocked the new tab — that's its popup blocker. One-time fix: click the 🚫 “Popup blocked” badge next to the address bar → “Always allow pop-ups from this site” → Done. (Heads-up: this permission is saved PER SITE ADDRESS — allowing it on another site doesn't carry over. In the installed Syrax app, use ⋮ → Settings → Site settings → Pop-ups and redirects.) For now tap “Open ↗” below — or just tap anywhere on this page — to go to ${label} now.`
+        : `Popup still blocked — tap “Open ↗” below or tap anywhere on this page to open ${label} now (the one-time fix above makes it permanent).`,
       url,
     )
+    // Any REAL tap/keydown restores Chrome's popup allowance instantly →
+    // re-open on the user's very next interaction (unless they're clicking a
+    // real button/link, which handles itself).
+    if (openRetryFn.current) {
+      window.removeEventListener('pointerdown', openRetryFn.current)
+      window.removeEventListener('keydown', openRetryFn.current)
+    }
+    const handler = (e: Event) => {
+      const el = e.target as HTMLElement | null
+      if (el && el.closest && el.closest('a,button')) return // UI handles it
+      let w2: Window | null = null
+      try {
+        w2 = window.open(url, '_blank')
+      } catch {
+        w2 = null
+      }
+      if (!w2) return // still no activation — stay armed for the next tap
+      openedTabs.current.push({ w: w2, kind })
+      setStatus(`↗ ${label} — opened in a new tab`)
+      if (openRetryFn.current) {
+        window.removeEventListener('pointerdown', openRetryFn.current)
+        window.removeEventListener('keydown', openRetryFn.current)
+        openRetryFn.current = null
+      }
+    }
+    openRetryFn.current = handler
+    window.addEventListener('pointerdown', handler)
+    window.addEventListener('keydown', handler)
     return false
   }
 
@@ -521,7 +551,7 @@ export default function Stage() {
       /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|some|the|a|an|tab|tabs|browser|page)$/.test(
         s.trim().toLowerCase(),
       )
-    const flushDelay = (s: string) => (dangling(s) ? 3500 : 900)
+    const flushDelay = (s: string) => (dangling(s) ? 3500 : 1200)
     const armFinalFlush = () => {
       if (finalTimer.current) window.clearTimeout(finalTimer.current)
       finalTimer.current = window.setTimeout(
@@ -554,10 +584,8 @@ export default function Stage() {
         sttHeals.current = 0
         finalBuf.current = finalBuf.current ? `${finalBuf.current} ${text}` : text
         const full = finalBuf.current.trim()
-        // Complete imperative ("open youtube" / "play X" / "stop syrax")?
-        // Fire NOW — the extra 1.3s of silence-wait only feels laggy and
-        // burns the popup window; partial phrases still get the full buffer.
-        if (full && !dangling(full) && (localIntent(full) || isHalt(full))) {
+        // "stop / shut up" fires INSTANTLY — a halt must cut through anything
+        if (full && isHalt(full)) {
           if (finalTimer.current) {
             window.clearTimeout(finalTimer.current)
             finalTimer.current = null
@@ -566,6 +594,11 @@ export default function Stage() {
           void handleSaid(full)
           return
         }
+        // EVERYTHING ELSE waits for REAL silence (1.2s; 3.5s after a
+        // trailing connector) so the command is read COMPLETELY first —
+        // "open youtube and play X", "a song by …", "open a tab and search
+        // for …" must never fire halfway through the sentence. Any new
+        // interim or final pushes the flush back again.
         armFinalFlush()
       },
       onError: (err) => {
