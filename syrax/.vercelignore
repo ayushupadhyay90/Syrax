@@ -1,0 +1,16 @@
+# Uploaded to Vercel: source only (remote build runs npm install there)
+node_modules
+dist
+.vercel
+*.tsbuildinfo
+
+# Local FastAPI backend — replaced by the serverless functions in api/.
+# .env lives here and holds the DeepSeek key — NEVER upload it.
+backend
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+.DS_Store

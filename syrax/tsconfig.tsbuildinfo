@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/ai/about.ts","./src/ai/syrax.ts","./src/browser/browserpanel.tsx","./src/chunks/chunk1.tsx","./src/chunks/stage.tsx","./src/three/background.tsx","./src/three/particles.ts","./src/voice/level.ts","./src/voice/stt.ts","./src/voice/tts.ts"],"version":"5.9.3"}
