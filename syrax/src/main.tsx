@@ -10,9 +10,10 @@ createRoot(document.getElementById('root')!).render(
 )
 
 // PWA: enables "Install Syrax" on desktop Chrome and "Add to Home screen" on
-// Android Chrome. Production only — dev must never be cached.
+// Android Chrome. Production only — dev must never be cached. Relative URL so
+// the scope follows the deploy path (root locally, /Syrax/ on GitHub Pages).
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
+    navigator.serviceWorker.register('./sw.js').catch(() => {})
   })
 }

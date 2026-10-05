@@ -1,5 +1,5 @@
 /* Generates the Syrax PWA icons (no image libs — raw PNG via node:zlib).
-   Design: deep magenta-black canvas + glowing magenta ring + hot core —
+   Design: deep blue-black canvas + glowing electric-blue ring + hot core —
    the same reactor-orb identity the app uses. Run: node scripts/gen-icons.mjs */
 import { deflateSync } from 'node:zlib'
 import { writeFileSync, mkdirSync } from 'node:fs'
@@ -66,43 +66,43 @@ function drawIcon(size, { scale = 1 }) {
       const dy = y + 0.5 - cy
       const d = Math.sqrt(dx * dx + dy * dy)
 
-      // base: #0a0106 with a faint radial magenta lift toward the center
+      // base: #040711 with a faint radial blue lift toward the center
       const lift = Math.exp(-d / (size * 0.55))
-      let r = 10 + 26 * lift
-      let g = 1 + 3 * lift
-      let b = 6 + 14 * lift
+      let r = 4 + 14 * lift
+      let g = 7 + 22 * lift
+      let b = 17 + 46 * lift
 
       // outer glow halo around the ring
       const glow = 0.62 * Math.exp(-((d - ringR) ** 2) / (2 * glowSig * glowSig))
-      r += 243 * glow
-      g += 13 * glow
-      b += 118 * glow
+      r += 59 * glow
+      g += 130 * glow
+      b += 246 * glow
 
       // crisp ring (top slightly brighter — light from above)
       const edge = (ringW / 2 - Math.abs(d - ringR)) / 1.6
       if (edge > 0) {
         const k = Math.min(1, edge)
         const top = 1 + 0.35 * (-dy / (d || 1))
-        const mr = 243 * top
-        const mg = 13 * top
-        const mb = 118 * top
+        const mr = 59 * top
+        const mg = 130 * top
+        const mb = 246 * top
         r += (mr - r) * k
         g += (mg - g) * k
         b += (mb - b) * k
         // bright inner edge line
         const line = Math.max(0, 1 - Math.abs(d - ringR + ringW * 0.18) / (ringW * 0.22))
         r += (255 - r) * line * 0.55
-        g += (215 - g) * line * 0.55
-        b += (233 - b) * line * 0.55
+        g += (245 - g) * line * 0.55
+        b += (255 - b) * line * 0.55
       }
 
-      // hot core: pink → white center
+      // hot core: blue → white center
       if (d < coreR) {
         const t = d / coreR
         const coreGlow = Math.exp(-((d / coreR) ** 2) * 3)
-        const kr = 255
-        const kg = 138 + (117 - 138) * (1 - t) // toward near-white at center
-        const kb = 194 + (248 - 194) * (1 - t)
+        const kr = 147 + (240 - 147) * (1 - t)
+        const kg = 197 + (247 - 197) * (1 - t) // toward near-white at center
+        const kb = 253 + (255 - 253) * (1 - t)
         const k = Math.min(1, (1 - t) * 2.2 + coreGlow)
         r += (kr - r) * k
         g += (kg - g) * k

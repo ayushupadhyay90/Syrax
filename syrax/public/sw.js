@@ -3,14 +3,15 @@
    bundle again (they were burned by cached builds before); the cache only
    kicks in when the network is down. Static assets are cache-first — Vite
    hashes every filename, so a new deploy automatically gets a fresh URL. */
-const CACHE = 'syrax-v1'
+const CACHE = 'syrax-v2'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(['/']).catch(() => {}))
+      // relative → caches the shell at WHATEVER path the app is served from
+      .then((cache) => cache.addAll(['./']).catch(() => {}))
       .catch(() => {}),
   )
 })
@@ -37,10 +38,10 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then((res) => {
           const copy = res.clone()
-          caches.open(CACHE).then((c) => c.put('/', copy)).catch(() => {})
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {})
           return res
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.match(req).then((hit) => hit || caches.match('./'))),
     )
     return
   }

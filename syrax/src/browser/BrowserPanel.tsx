@@ -111,28 +111,28 @@ export function BrowserPanel({
   return (
     <div
       ref={panelRef}
-      className="fixed inset-0 z-50 flex flex-col overflow-hidden rounded-[14px] bg-[#12020a] shadow-[0_30px_90px_rgba(243,13,118,0.28)] ring-1 ring-[#F30D76]/35"
+      className="fixed inset-0 z-50 flex flex-col overflow-hidden rounded-[14px] bg-[#071022] shadow-[0_30px_90px_rgba(59,130,246,0.28)] ring-1 ring-[#3B82F6]/35"
       style={{ visibility: open ? 'visible' : 'hidden', willChange: 'transform, opacity' }}
     >
-      {/* chrome — magenta theme */}
-      <div className="flex items-center gap-2 border-b border-[#F30D76]/25 bg-[#1c0412] px-3.5 py-2.5">
-        <span className="h-2.5 w-2.5 rounded-full bg-[#F30D76]" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#F30D76]/55" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#F30D76]/30" />
-        <div className="mx-2.5 flex-1 truncate rounded-full border border-[#F30D76]/25 bg-black/60 px-3.5 py-1.5 text-xs text-[#F30D76]/85">
+      {/* chrome — blue theme */}
+      <div className="flex items-center gap-2 border-b border-[#3B82F6]/25 bg-[#0A142C] px-3.5 py-2.5">
+        <span className="h-2.5 w-2.5 rounded-full bg-[#3B82F6]" />
+        <span className="h-2.5 w-2.5 rounded-full bg-[#3B82F6]/55" />
+        <span className="h-2.5 w-2.5 rounded-full bg-[#3B82F6]/30" />
+        <div className="mx-2.5 flex-1 truncate rounded-full border border-[#3B82F6]/25 bg-black/60 px-3.5 py-1.5 text-xs text-[#3B82F6]/85">
           {browser.target === 'youtube' ? 'youtube.com' : 'google.com'} / {browser.query || 'new tab'}
         </div>
         <button
           onClick={onDock}
           title={docked ? 'Expand' : 'Minimize to corner'}
-          className="rounded-md px-2 py-1 text-[#F30D76]/70 transition-colors hover:bg-[#F30D76]/20 hover:text-white"
+          className="rounded-md px-2 py-1 text-[#3B82F6]/70 transition-colors hover:bg-[#3B82F6]/20 hover:text-white"
         >
           ⤢
         </button>
         <button
           onClick={onClose}
           title="Close"
-          className="rounded-md px-2 py-1 text-[#F30D76]/70 transition-colors hover:bg-[#F30D76]/20 hover:text-white"
+          className="rounded-md px-2 py-1 text-[#3B82F6]/70 transition-colors hover:bg-[#3B82F6]/20 hover:text-white"
         >
           ✕
         </button>
@@ -140,17 +140,17 @@ export function BrowserPanel({
       {ytSplash ? (
         browser.ytPending ? (
           /* searching — shown instantly while /api/youtube resolves */
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-[#0a0106]">
-            <span className="h-10 w-10 animate-spin rounded-full border-2 border-[#F30D76]/25 border-t-[#F30D76]" />
-            <p className="text-sm tracking-wide text-[#F30D76]/85">Searching YouTube…</p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-[#040711]">
+            <span className="h-10 w-10 animate-spin rounded-full border-2 border-[#3B82F6]/25 border-t-[#3B82F6]" />
+            <p className="text-sm tracking-wide text-[#3B82F6]/85">Searching YouTube…</p>
           </div>
         ) : browser.query ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-[#0a0106]">
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-[#040711]">
             <span className="text-3xl">📺</span>
-            <p className="text-sm tracking-wide text-[#F30D76]/85">No videos found for “{browser.query}”</p>
+            <p className="text-sm tracking-wide text-[#3B82F6]/85">No videos found for “{browser.query}”</p>
             <button
               onClick={() => onSearch?.('')}
-              className="rounded-full border border-[#F30D76]/40 px-4 py-1.5 text-xs text-[#F30D76] transition-colors hover:bg-[#F30D76]/15"
+              className="rounded-full border border-[#3B82F6]/40 px-4 py-1.5 text-xs text-[#3B82F6] transition-colors hover:bg-[#3B82F6]/15"
             >
               ← Back to YouTube home
             </button>
@@ -172,7 +172,7 @@ export function BrowserPanel({
               '*',
             )
           }}
-          className="w-full flex-1 border-0 bg-[#0a0106]"
+          className="w-full flex-1 border-0 bg-[#040711]"
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
@@ -233,7 +233,7 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
   }, [chip, tick])
 
   return (
-    <div className="flex flex-1 flex-col overflow-y-auto bg-[#0a0106] p-4">
+    <div className="flex flex-1 flex-col overflow-y-auto bg-[#040711] p-4">
       {/* search bar */}
       <form
         onSubmit={(e) => {
@@ -247,11 +247,11 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Search YouTube…"
-          className="min-w-0 flex-1 rounded-full border border-[#F30D76]/30 bg-black/60 px-4 py-2 text-sm text-slate-100 placeholder:text-[#F30D76]/40 focus:border-[#F30D76]/70 focus:outline-none"
+          className="min-w-0 flex-1 rounded-full border border-[#3B82F6]/30 bg-black/60 px-4 py-2 text-sm text-slate-100 placeholder:text-[#3B82F6]/40 focus:border-[#3B82F6]/70 focus:outline-none"
         />
         <button
           type="submit"
-          className="rounded-full bg-[#F30D76] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-95"
+          className="rounded-full bg-[#3B82F6] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-95"
         >
           Search
         </button>
@@ -265,8 +265,8 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
             onClick={() => setChip(c.q)}
             className={`rounded-full border px-3 py-1 text-[11px] transition-colors ${
               chip === c.q
-                ? 'border-[#F30D76] bg-[#F30D76]/20 text-white'
-                : 'border-[#F30D76]/25 text-[#F30D76]/75 hover:border-[#F30D76]/60 hover:bg-[#F30D76]/10'
+                ? 'border-[#3B82F6] bg-[#3B82F6]/20 text-white'
+                : 'border-[#3B82F6]/25 text-[#3B82F6]/75 hover:border-[#3B82F6]/60 hover:bg-[#3B82F6]/10'
             }`}
           >
             {c.label}
@@ -277,15 +277,15 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
       {/* results grid */}
       {state === 'loading' && (
         <div className="flex flex-1 items-center justify-center py-10">
-          <span className="h-9 w-9 animate-spin rounded-full border-2 border-[#F30D76]/25 border-t-[#F30D76]" />
+          <span className="h-9 w-9 animate-spin rounded-full border-2 border-[#3B82F6]/25 border-t-[#3B82F6]" />
         </div>
       )}
       {state === 'error' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10">
-          <p className="text-sm text-[#F30D76]/70">Couldn’t reach YouTube — network hiccup.</p>
+          <p className="text-sm text-[#3B82F6]/70">Couldn’t reach YouTube — network hiccup.</p>
           <button
             onClick={() => setTick((t) => t + 1)}
-            className="rounded-full border border-[#F30D76]/40 px-4 py-1.5 text-xs text-[#F30D76] transition-colors hover:bg-[#F30D76]/15"
+            className="rounded-full border border-[#3B82F6]/40 px-4 py-1.5 text-xs text-[#3B82F6] transition-colors hover:bg-[#3B82F6]/15"
           >
             ↻ Retry
           </button>
@@ -297,7 +297,7 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
             <button
               key={v.id}
               onClick={() => onPick?.(v.id, v.title)}
-              className="group overflow-hidden rounded-xl border border-[#F30D76]/20 bg-[#F30D76]/[0.05] text-left transition-all hover:border-[#F30D76]/60 hover:bg-[#F30D76]/[0.1] hover:shadow-[0_0_18px_rgba(243,13,118,0.25)]"
+              className="group overflow-hidden rounded-xl border border-[#3B82F6]/20 bg-[#3B82F6]/[0.05] text-left transition-all hover:border-[#3B82F6]/60 hover:bg-[#3B82F6]/[0.1] hover:shadow-[0_0_18px_rgba(59,130,246,0.25)]"
             >
               <img
                 src={`https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`}
@@ -312,7 +312,7 @@ function YouTubeHome({ onSearch, onPick }: { onSearch?: (q: string) => void; onP
             </button>
           ))}
           {(items ?? []).length === 0 && (
-            <p className="col-span-full py-6 text-center text-sm text-[#F30D76]/70">No results — try another chip or search.</p>
+            <p className="col-span-full py-6 text-center text-sm text-[#3B82F6]/70">No results — try another chip or search.</p>
           )}
         </div>
       )}

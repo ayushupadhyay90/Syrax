@@ -20,7 +20,7 @@ function hexToTint(hex: string) {
 export function OrbCanvas({
   size,
   state = 'searching',
-  tint = '#F30D76',
+  tint = '#3B82F6',
   speed = 1,
   density = 3,
 }: {
@@ -110,12 +110,12 @@ export default function Chunk1() {
           width: size * 1.7,
           height: size * 1.7,
           background:
-            'radial-gradient(circle, rgba(243,13,118,0.12) 0%, rgba(243,13,118,0.04) 42%, transparent 68%)',
+            'radial-gradient(circle, rgba(59,130,246,0.12) 0%, rgba(59,130,246,0.04) 42%, transparent 68%)',
         }}
       />
       {/* the block */}
       <div className="absolute inset-0 grid place-items-center">
-        <OrbCanvas size={size} state="searching" tint="#F30D76" />
+        <OrbCanvas size={size} state="searching" tint="#3B82F6" />
       </div>
     </div>
   )

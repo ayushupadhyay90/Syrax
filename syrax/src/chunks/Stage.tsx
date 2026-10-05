@@ -3,7 +3,7 @@ import type { OrbState } from 'thinking-orbs'
 import { OrbCanvas, useHeroSize } from './Chunk1'
 import { SpeechRecognizer } from '../voice/stt'
 import { speak, stopSpeaking } from '../voice/tts'
-import { askSyrax, localIntent, type ChatMessage, type AgentCommand } from '../ai/syrax'
+import { askSyrax, localIntent, hasDSKey, setDSKey, type ChatMessage, type AgentCommand } from '../ai/syrax'
 import { ABOUT_SPOKEN, ABOUT_TEXT, ABOUT_INTRO, ABOUT_PUNCHLINE, ABOUT_OPERATIONS } from '../ai/about'
 import { BrowserPanel, type BrowserTarget } from '../browser/BrowserPanel'
 
@@ -28,12 +28,12 @@ const PHASE_ORB: Record<Phase, OrbState> = {
 }
 
 const PHASE_META: Record<Phase, { label: string; dot: string; pulse: string }> = {
-  idle: { label: 'Idle', dot: 'bg-[#F30D76]/50', pulse: '' },
+  idle: { label: 'Idle', dot: 'bg-[#3B82F6]/50', pulse: '' },
   listening: { label: 'Listening', dot: 'bg-emerald-400', pulse: 'animate-pulse' },
-  thinking: { label: 'Thinking', dot: 'bg-[#F30D76]', pulse: 'animate-pulse' },
+  thinking: { label: 'Thinking', dot: 'bg-[#3B82F6]', pulse: 'animate-pulse' },
   solving: { label: 'Solving', dot: 'bg-fuchsia-500', pulse: 'animate-pulse' },
   searching: { label: 'Searching', dot: 'bg-fuchsia-400', pulse: 'animate-pulse' },
-  speaking: { label: 'Responding', dot: 'bg-[#FF8AC2]', pulse: 'animate-pulse' },
+  speaking: { label: 'Responding', dot: 'bg-[#93C5FD]', pulse: 'animate-pulse' },
 }
 
 type Op = {
@@ -171,10 +171,11 @@ const CHAT_MAX = 200
  * without this the panel would show "video unavailable".
  */
 async function resolveVideo(query: string): Promise<string | undefined> {
-  // weak-network resilience: one automatic retry before giving up
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // weak-network resilience: 3 attempts with escalating backoff; a missing
+  // backend (404/405 on static hosting) is permanent — no wasted retries
+  for (let attempt = 0; attempt < 3; attempt++) {
     const ctrl = new AbortController()
-    const to = window.setTimeout(() => ctrl.abort(), 6000) // never hang the open
+    const to = window.setTimeout(() => ctrl.abort(), 5000) // never hang the open
     try {
       const r = await fetch(`/api/youtube?q=${encodeURIComponent(query)}`, { signal: ctrl.signal })
       if (r.ok) {
@@ -183,22 +184,25 @@ async function resolveVideo(query: string): Promise<string | undefined> {
           window.clearTimeout(to)
           return d.ids[0]
         }
+      } else if (r.status === 404 || r.status === 405) {
+        window.clearTimeout(to)
+        return undefined // no /api here → straight to the results-page fallback
       }
     } catch {
-      /* network hiccup / timeout → retry once */
+      /* network hiccup / timeout → escalating retry */
     }
     window.clearTimeout(to)
-    if (attempt === 0) await new Promise((res) => setTimeout(res, 900))
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 600 + attempt * 800))
   }
   return undefined // backend down → fall back to the YouTube results page
 }
 
 /** Shown inside the reserved tab while the real URL is still being decided. */
 const SPLASH_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Syrax</title></head>
-<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0a0106;color:#F30D76;font-family:system-ui,sans-serif">
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:#040711;color:#3B82F6;font-family:system-ui,sans-serif">
 <div style="text-align:center">
-<div style="font-size:30px;font-weight:900;letter-spacing:.42em;color:#fff;text-shadow:0 0 26px rgba(243,13,118,.85)">SYRAX</div>
-<div style="margin-top:12px;font-size:11px;letter-spacing:.34em;color:#ff8ac2">OPENING…</div>
+<div style="font-size:30px;font-weight:900;letter-spacing:.42em;color:#fff;text-shadow:0 0 26px rgba(59,130,246,.85)">SYRAX</div>
+<div style="margin-top:12px;font-size:11px;letter-spacing:.34em;color:#93C5FD">OPENING…</div>
 </div>
 </body></html>`
 
@@ -225,6 +229,8 @@ export default function Stage() {
   const [browser, setBrowser] = useState<BrowserTarget | null>(null)
   const [autoplay, setAutoplay] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [keyOpen, setKeyOpen] = useState(false)
+  const [keyDraft, setKeyDraft] = useState('')
   const [micBlocked, setMicBlocked] = useState(false)
   const [videoPlaying, setVideoPlaying] = useState(false)
   /** Now-Playing strip (user request): set when a resolved song opens in a
@@ -239,6 +245,33 @@ export default function Stage() {
       /* storage quota exceeded — the in-memory chat still works */
     }
   }, [messages])
+
+  /** One-time key handoff: open the app with ?key=sk-… → save it to this
+   *  device's browser, then strip it from the URL (never left in history). */
+  useEffect(() => {
+    try {
+      const k = new URLSearchParams(window.location.search).get('key')
+      if (k && k.length > 8) {
+        setDSKey(k)
+        history.replaceState(null, '', window.location.pathname + window.location.hash)
+      }
+    } catch {
+      /* ignore malformed params */
+    }
+  }, [])
+
+  /** Connection awareness — the status line tells the truth when the net drops. */
+  useEffect(() => {
+    const off = () => setStatus('📡 Offline — reconnecting…')
+    const on = () => setStatus('✅ Back online')
+    window.addEventListener('offline', off)
+    window.addEventListener('online', on)
+    if (!navigator.onLine) off()
+    return () => {
+      window.removeEventListener('offline', off)
+      window.removeEventListener('online', on)
+    }
+  }, [])
 
   const orbSize = useHeroSize(0.42, 220, 440)
   const historyRef = useRef<ChatMessage[]>([])
@@ -258,6 +291,8 @@ export default function Stage() {
   const openedTabs = useRef<{ w: Window; kind: 'youtube' | 'google' }[]>([])
   /** Consecutive STT network drops — auto-reconnect before giving up. */
   const netRetries = useRef(0)
+  /** The 🔑 setup card has been shown once — never nag again. */
+  const keyNagged = useRef(false)
   /** Tab reserved WHILE the imperative phrase streams in — Chrome only honours
    *  window.open() for ~5s after a gesture (the mic click), so voice commands
    *  must grab the window early and just navigate it later. */
@@ -478,7 +513,7 @@ export default function Stage() {
   // ── voice in ────────────────────────────────────────────────────────────
   useEffect(() => {
     // "listen first, then respond": buffer final segments and fire only after
-    // the speaker ACTUALLY pauses (1.3s of silence) — never mid-statement.
+    // the speaker ACTUALLY pauses (0.9s of silence) — never mid-statement.
     // New speech (final OR interim) during the wait pushes the flush back.
     const armFinalFlush = () => {
       if (finalTimer.current) window.clearTimeout(finalTimer.current)
@@ -489,7 +524,7 @@ export default function Stage() {
           finalTimer.current = null
           if (full) void handleSaid(full)
         },
-        1300,
+        900,
       )
     }
 
@@ -547,9 +582,9 @@ export default function Stage() {
           recognizerRef.current?.stop() // release the mic + kill any restart loop
         } else if (err === 'network') {
           // Web Speech drops the connection on flaky networks often — recover
-          // SILENTLY (up to 2×) instead of killing the mic mid-conversation
+          // SILENTLY (up to 4×, escalating delays) instead of killing the mic
           netRetries.current += 1
-          if (netRetries.current <= 2 && micRef.current) {
+          if (netRetries.current <= 4 && micRef.current) {
             setStatus('Voice link dropped — reconnecting…')
             recognizerRef.current?.stop() // end the dead session cleanly (no restart loop)
             window.setTimeout(() => {
@@ -560,7 +595,7 @@ export default function Stage() {
                   setStatus('Listening')
                 }
               })
-            }, 1400)
+            }, 1200 * netRetries.current) // escalating backoff: 1.2s → 4.8s
           } else {
             setMessages((m) =>
               m.some((x) => x.text.startsWith('Voice engine lost'))
@@ -671,6 +706,12 @@ export default function Stage() {
         content: JSON.stringify({ reply: '[stopped]', action: { type: 'none' } }),
       })
       return
+    }
+
+    // 🔑 first brain-ask with no key saved → open setup once (commands still run)
+    if (!import.meta.env.DEV && !hasDSKey() && !keyNagged.current) {
+      keyNagged.current = true
+      setKeyOpen(true)
     }
 
     const id = runIdRef.current
@@ -1010,23 +1051,23 @@ export default function Stage() {
       className="grid hud-root h-full w-full grid-rows-[auto_1fr] font-sans text-slate-200 select-none"
       style={{
         background:
-          'radial-gradient(1100px 420px at 50% -8%, rgba(243,13,118,0.16), transparent 62%),' +
-          'radial-gradient(750px 520px at 8% 108%, rgba(243,13,118,0.10), transparent 65%),' +
-          'radial-gradient(750px 520px at 92% 108%, rgba(243,13,118,0.10), transparent 65%),' +
-          '#0a0106',
+          'radial-gradient(1100px 420px at 50% -8%, rgba(59,130,246,0.16), transparent 62%),' +
+          'radial-gradient(750px 520px at 8% 108%, rgba(59,130,246,0.10), transparent 65%),' +
+          'radial-gradient(750px 520px at 92% 108%, rgba(59,130,246,0.10), transparent 65%),' +
+          '#040711',
       }}
     >
       {/* ── TOP: SYRAX wordmark ───────────────────────────────────────── */}
-      <header className="hud datastream relative flex items-center justify-between border-b border-[#F30D76]/20 bg-[#F30D76]/[0.03] px-6 py-2.5">
-        <div className="w-44 text-[10px] tracking-[0.25em] text-[#F30D76]/50 uppercase">SYRAX — Mark 1</div>
+      <header className="hud datastream relative flex items-center justify-between border-b border-[#3B82F6]/20 bg-[#3B82F6]/[0.03] px-6 py-2.5">
+        <div className="w-44 text-[10px] tracking-[0.25em] text-[#3B82F6]/50 uppercase">SYRAX — Mark 1</div>
 
         {/* hero wordmark — bold, glowing, unmistakably Syrax */}
         <div className="pointer-events-none relative flex flex-col items-center justify-center">
           <div className="relative">
-            {/* magenta bloom behind the letters */}
+            {/* blue bloom behind the letters */}
             <span
               aria-hidden
-              className="absolute inset-0 animate-[micring_3.2s_ease-in-out_infinite] text-[68px] font-black tracking-[0.42em] text-[#F30D76] blur-2xl opacity-45 select-none"
+              className="absolute inset-0 animate-[micring_3.2s_ease-in-out_infinite] text-[68px] font-black tracking-[0.42em] text-[#3B82F6] blur-2xl opacity-45 select-none"
               style={{ lineHeight: 1 }}
             >
               SYRAX
@@ -1034,23 +1075,23 @@ export default function Stage() {
             <h1
               className="relative text-[68px] leading-none font-black tracking-[0.42em] text-transparent select-none"
               style={{
-                background: 'linear-gradient(180deg, #ffffff 8%, #ffd7e9 38%, #F30D76 72%, #8f0a4b 100%)',
+                background: 'linear-gradient(180deg, #ffffff 8%, #CFE3FF 38%, #3B82F6 72%, #1E40AF 100%)',
                 WebkitBackgroundClip: 'text',
                 backgroundClip: 'text',
-                filter: 'drop-shadow(0 3px 14px rgba(243,13,118,0.42))',
+                filter: 'drop-shadow(0 3px 14px rgba(59,130,246,0.42))',
                 marginRight: '-0.42em', // optical centering (trailing letter-space)
               }}
             >
               SYRAX
             </h1>
           </div>
-          <span className="mt-1 text-[9.5px] tracking-[0.55em] text-[#F30D76]/85 uppercase" style={{ paddingLeft: '0.55em' }}>
+          <span className="mt-1 text-[9.5px] tracking-[0.55em] text-[#3B82F6]/85 uppercase" style={{ paddingLeft: '0.55em' }}>
             voice agent
           </span>
         </div>
 
         <div className="flex w-44 justify-end">
-          <span className={`flex items-center gap-2 rounded-full border border-[#F30D76]/40 bg-[#F30D76]/[0.07] px-3 py-1 text-[10px] tracking-widest uppercase text-slate-300`}>
+          <span className={`flex items-center gap-2 rounded-full border border-[#3B82F6]/40 bg-[#3B82F6]/[0.07] px-3 py-1 text-[10px] tracking-widest uppercase text-slate-300`}>
             <span className={`h-1.5 w-1.5 rounded-full ${meta.dot} ${meta.pulse}`} />
             {meta.label}
           </span>
@@ -1061,10 +1102,10 @@ export default function Stage() {
       <div className="grid min-h-0 grid-cols-[minmax(200px,250px)_1fr_minmax(260px,330px)] gap-3 p-3">
         {/* LEFT: operations */}
         <aside className="flex min-h-0 flex-col gap-3">
-          <div className="hud hud-panel panel-glow flex min-h-0 flex-1 flex-col rounded-2xl border border-[#F30D76]/18 bg-[#F30D76]/[0.045] backdrop-blur-sm">
-            <header className="border-b border-[#F30D76]/15 px-4 py-2.5">
-              <h2 className="text-[10px] font-semibold tracking-[0.25em] text-[#F30D76] uppercase">Operations</h2>
-              <p className="mt-0.5 text-[11px] text-[#F30D76]/50">Click one, or ask by voice</p>
+          <div className="hud hud-panel panel-glow flex min-h-0 flex-1 flex-col rounded-2xl border border-[#3B82F6]/18 bg-[#3B82F6]/[0.045] backdrop-blur-sm">
+            <header className="border-b border-[#3B82F6]/15 px-4 py-2.5">
+              <h2 className="text-[10px] font-semibold tracking-[0.25em] text-[#3B82F6] uppercase">Operations</h2>
+              <p className="mt-0.5 text-[11px] text-[#3B82F6]/50">Click one, or ask by voice</p>
             </header>
             <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto p-2.5">
               {OPERATIONS.map((op) => {
@@ -1083,8 +1124,8 @@ export default function Stage() {
                     }}
                     className={`group hud-scan flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-300 ${
                       active
-                        ? 'border-[#F30D76]/65 bg-[#F30D76]/15 shadow-[0_0_24px_rgba(243,13,118,0.3)]'
-                        : 'border-[#F30D76]/15 bg-[#F30D76]/[0.04] hover:border-[#F30D76]/45 hover:bg-[#F30D76]/[0.09]'
+                        ? 'border-[#3B82F6]/65 bg-[#3B82F6]/15 shadow-[0_0_24px_rgba(59,130,246,0.3)]'
+                        : 'border-[#3B82F6]/15 bg-[#3B82F6]/[0.04] hover:border-[#3B82F6]/45 hover:bg-[#3B82F6]/[0.09]'
                     }`}
                   >
                     <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-black/45 text-sm transition-transform duration-200 group-hover:scale-110">
@@ -1092,14 +1133,14 @@ export default function Stage() {
                     </span>
                     <span className="min-w-0">
                       <span className="block truncate text-[12.5px] font-medium text-slate-100">{op.label}</span>
-                      <span className="block truncate text-[10.5px] text-[#F30D76]/55">{op.hint}</span>
+                      <span className="block truncate text-[10.5px] text-[#3B82F6]/55">{op.hint}</span>
                     </span>
-                    {active && <span className="ml-auto h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#F30D76]" />}
+                    {active && <span className="ml-auto h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#3B82F6]" />}
                   </button>
                 )
               })}
             </div>
-            <footer className="border-t border-[#F30D76]/15 px-4 py-2 text-[10px] tracking-wider text-[#F30D76]/45">
+            <footer className="border-t border-[#3B82F6]/15 px-4 py-2 text-[10px] tracking-wider text-[#3B82F6]/45">
               Voice works in Chrome / Edge
             </footer>
           </div>
@@ -1113,25 +1154,25 @@ export default function Stage() {
             style={{
               width: orbSize * 1.8,
               height: orbSize * 1.8,
-              background: 'radial-gradient(circle, rgba(243,13,118,0.14) 0%, rgba(243,13,118,0.05) 42%, transparent 68%)',
+              background: 'radial-gradient(circle, rgba(59,130,246,0.14) 0%, rgba(59,130,246,0.05) 42%, transparent 68%)',
             }}
           />
 
           {/* the orb — animation swaps with phase */}
           <div className="relative z-10">
-            <OrbCanvas size={orbSize} state={PHASE_ORB[phase]} tint="#F30D76" />
+            <OrbCanvas size={orbSize} state={PHASE_ORB[phase]} tint="#3B82F6" />
           </div>
 
-          {/* live action line — looping magenta border, shimmering text */}
+          {/* live action line — looping blue border, shimmering text */}
           <div className="syrax-loop relative z-10 w-full max-w-lg rounded-2xl p-[1.5px]">
-            <div className="rounded-2xl bg-[#0f0208]/92 px-5 py-3 text-center backdrop-blur-sm">
+            <div className="rounded-2xl bg-[#050D1D]/92 px-5 py-3 text-center backdrop-blur-sm">
               <span className="caret syrax-shimmer text-[13.5px] font-semibold tracking-wide">{status}</span>
             </div>
           </div>
 
           {/* Now-Playing strip (user request) — animated equalizer, same HUD style */}
           {nowPlaying && (
-            <div className="nowplaying relative z-10 flex items-center gap-3 rounded-full border border-[#F30D76]/45 bg-[#0f0208]/92 px-4 py-2 backdrop-blur-sm">
+            <div className="nowplaying relative z-10 flex items-center gap-3 rounded-full border border-[#3B82F6]/45 bg-[#050D1D]/92 px-4 py-2 backdrop-blur-sm">
               <span className="eq" aria-hidden>
                 <i />
                 <i />
@@ -1153,13 +1194,13 @@ export default function Stage() {
               aria-label={phase === 'speaking' ? 'Stop speaking' : 'Toggle microphone'}
               className={`relative grid h-16 w-16 place-items-center rounded-full border bg-black/70 text-xl backdrop-blur-md transition-all duration-200 hover:scale-105 ${
                 micOn || phase === 'speaking'
-                  ? 'border-[#F30D76] shadow-[0_0_34px_rgba(243,13,118,0.55)] animate-[micring_1.4s_infinite]'
-                  : 'border-[#F30D76]/45 hover:border-[#F30D76]/85 hover:shadow-[0_0_24px_rgba(243,13,118,0.35)]'
+                  ? 'border-[#3B82F6] shadow-[0_0_34px_rgba(59,130,246,0.55)] animate-[micring_1.4s_infinite]'
+                  : 'border-[#3B82F6]/45 hover:border-[#3B82F6]/85 hover:shadow-[0_0_24px_rgba(59,130,246,0.35)]'
               }${micOn && phase !== 'speaking' ? ' mic-live' : ''}`}
             >
               {phase === 'speaking' ? '⏹' : micOn ? '◼' : '🎤'}
             </button>
-            <p className="max-w-md min-h-[18px] text-center text-sm text-[#F30D76]/75">
+            <p className="max-w-md min-h-[18px] text-center text-sm text-[#3B82F6]/75">
               {phase === 'speaking'
                 ? 'Tap ⏹ to stop Syrax'
                 : micOn
@@ -1181,14 +1222,14 @@ export default function Stage() {
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => void retryMic()}
-                  className="rounded-full border border-[#F30D76]/50 bg-[#F30D76]/10 px-4 py-1.5 text-xs font-medium text-[#F30D76] transition-all hover:bg-[#F30D76]/20 hover:shadow-[0_0_16px_rgba(243,13,118,0.35)]"
+                  className="rounded-full border border-[#3B82F6]/50 bg-[#3B82F6]/10 px-4 py-1.5 text-xs font-medium text-[#3B82F6] transition-all hover:bg-[#3B82F6]/20 hover:shadow-[0_0_16px_rgba(59,130,246,0.35)]"
                 >
                   🔓 Retry microphone
                 </button>
                 <button
                   onClick={() => setMicBlocked(false)}
                   title="Dismiss"
-                  className="grid h-6 w-6 place-items-center rounded-full border border-[#F30D76]/30 text-[11px] text-[#F30D76]/70 transition-colors hover:bg-[#F30D76]/15 hover:text-white"
+                  className="grid h-6 w-6 place-items-center rounded-full border border-[#3B82F6]/30 text-[11px] text-[#3B82F6]/70 transition-colors hover:bg-[#3B82F6]/15 hover:text-white"
                 >
                   ✕
                 </button>
@@ -1198,10 +1239,24 @@ export default function Stage() {
         </section>
 
         {/* RIGHT: conversation */}
-        <aside className="hud hud-panel panel-glow flex min-h-0 flex-col rounded-2xl border border-[#F30D76]/18 bg-[#F30D76]/[0.045] backdrop-blur-sm">
-          <header className="border-b border-[#F30D76]/15 px-4 py-2.5">
-            <h2 className="text-[10px] font-semibold tracking-[0.25em] text-[#F30D76] uppercase">Conversation</h2>
-            <p className="mt-0.5 text-[11px] text-[#F30D76]/50">You ↔ Syrax</p>
+        <aside className="hud hud-panel panel-glow flex min-h-0 flex-col rounded-2xl border border-[#3B82F6]/18 bg-[#3B82F6]/[0.045] backdrop-blur-sm">
+          <header className="flex items-center justify-between border-b border-[#3B82F6]/15 px-4 py-2.5">
+            <div>
+              <h2 className="text-[10px] font-semibold tracking-[0.25em] text-[#3B82F6] uppercase">Conversation</h2>
+              <p className="mt-0.5 text-[11px] text-[#3B82F6]/50">You ↔ Syrax</p>
+            </div>
+            <button
+              onClick={() => setKeyOpen(true)}
+              title={hasDSKey() ? 'Brain key installed — tap to change' : 'Add your DeepSeek API key'}
+              className="relative grid h-7 w-7 place-items-center rounded-lg border border-[#3B82F6]/30 text-[13px] text-[#3B82F6]/80 transition-colors hover:border-[#3B82F6]/70 hover:bg-[#3B82F6]/15 hover:text-white"
+            >
+              🔑
+              <span
+                className={`absolute -top-1 -right-1 h-2 w-2 rounded-full ${
+                  hasDSKey() ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]' : 'bg-amber-400'
+                }`}
+              />
+            </button>
           </header>
 
           <div ref={chatRef} className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
@@ -1210,13 +1265,13 @@ export default function Stage() {
                 key={i}
                 className={`group msg max-w-[90%] rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed ${
                   m.who === 'you'
-                    ? 'self-end border border-[#F30D76]/40 bg-[#F30D76]/15 text-slate-100'
-                    : 'msg-syrax self-start border border-[#F30D76]/25 bg-[#F30D76]/[0.07] text-slate-200'
+                    ? 'self-end border border-[#3B82F6]/40 bg-[#3B82F6]/15 text-slate-100'
+                    : 'msg-syrax self-start border border-[#3B82F6]/25 bg-[#3B82F6]/[0.07] text-slate-200'
                 }`}
               >
                 <div
                   className={`mb-0.5 text-[9.5px] font-semibold tracking-widest uppercase ${
-                    m.who === 'you' ? 'text-[#F30D76]/70' : 'text-[#F30D76]'
+                    m.who === 'you' ? 'text-[#3B82F6]/70' : 'text-[#3B82F6]'
                   }`}
                 >
                   {m.who === 'you' ? 'You' : 'Syrax'}
@@ -1229,7 +1284,7 @@ export default function Stage() {
                         href={m.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="ml-1.5 font-semibold text-[#F30D76] underline underline-offset-2 transition-colors hover:text-white"
+                        className="ml-1.5 font-semibold text-[#3B82F6] underline underline-offset-2 transition-colors hover:text-white"
                       >
                         Open ↗
                       </a>
@@ -1242,7 +1297,7 @@ export default function Stage() {
                         inputRef.current?.focus()
                       }}
                       title="Edit & resend"
-                      className="shrink-0 self-end rounded border border-[#F30D76]/30 px-1.5 py-0.5 text-[10px] text-[#F30D76]/70 opacity-40 transition group-hover:opacity-100 hover:bg-[#F30D76]/20 hover:text-white"
+                      className="shrink-0 self-end rounded border border-[#3B82F6]/30 px-1.5 py-0.5 text-[10px] text-[#3B82F6]/70 opacity-40 transition group-hover:opacity-100 hover:bg-[#3B82F6]/20 hover:text-white"
                     >
                       ✎
                     </button>
@@ -1251,39 +1306,39 @@ export default function Stage() {
               </div>
             ))}
             {phase === 'thinking' && (
-              <div className="flex items-center gap-1.5 self-start rounded-2xl border border-[#F30D76]/30 bg-[#F30D76]/10 px-4 py-2.5">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F30D76] [animation-delay:-0.2s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F30D76] [animation-delay:-0.1s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#F30D76]" />
+              <div className="flex items-center gap-1.5 self-start rounded-2xl border border-[#3B82F6]/30 bg-[#3B82F6]/10 px-4 py-2.5">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#3B82F6] [animation-delay:-0.2s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#3B82F6] [animation-delay:-0.1s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#3B82F6]" />
               </div>
             )}
           </div>
 
           {/* video transport — play/pause whatever the panel is showing */}
           {browser?.videoId && (
-            <div className="flex items-center gap-2 border-t border-[#F30D76]/15 px-2.5 py-1.5">
+            <div className="flex items-center gap-2 border-t border-[#3B82F6]/15 px-2.5 py-1.5">
               <button
                 onClick={toggleVideo}
-                className="flex shrink-0 items-center gap-1.5 rounded-full border border-[#F30D76]/40 bg-[#F30D76]/10 px-3 py-1 text-[11px] font-medium text-[#F30D76] transition-colors hover:bg-[#F30D76]/20"
+                className="flex shrink-0 items-center gap-1.5 rounded-full border border-[#3B82F6]/40 bg-[#3B82F6]/10 px-3 py-1 text-[11px] font-medium text-[#3B82F6] transition-colors hover:bg-[#3B82F6]/20"
                 title={videoPlaying ? 'Pause the video' : 'Play the video'}
               >
                 {videoPlaying ? '⏸ Pause' : '▶ Play'}
               </button>
-              <span className="truncate text-[10.5px] text-[#F30D76]/45">{browser.query || 'Video panel'}</span>
+              <span className="truncate text-[10.5px] text-[#3B82F6]/45">{browser.query || 'Video panel'}</span>
             </div>
           )}
 
-          <form onSubmit={submitDraft} className="flex gap-1.5 border-t border-[#F30D76]/15 p-2.5">
+          <form onSubmit={submitDraft} className="flex gap-1.5 border-t border-[#3B82F6]/15 p-2.5">
             <input
               ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Type a message to Syrax…"
-              className="min-w-0 flex-1 rounded-xl border border-[#F30D76]/25 bg-black/45 px-3 py-2 text-[13px] text-slate-100 placeholder:text-[#F30D76]/35 focus:border-[#F30D76]/70 focus:outline-none"
+              className="min-w-0 flex-1 rounded-xl border border-[#3B82F6]/25 bg-black/45 px-3 py-2 text-[13px] text-slate-100 placeholder:text-[#3B82F6]/35 focus:border-[#3B82F6]/70 focus:outline-none"
             />
             <button
               type="submit"
-              className="grid w-10 shrink-0 place-items-center rounded-xl bg-[#F30D76] font-bold text-white transition-all hover:brightness-110 active:scale-95"
+              className="grid w-10 shrink-0 place-items-center rounded-xl bg-[#3B82F6] font-bold text-white transition-all hover:brightness-110 active:scale-95"
               aria-label="Send"
             >
               ↑
@@ -1293,19 +1348,111 @@ export default function Stage() {
       </div>
 
       {/* ── About Syrax overlay ───────────────────────────────────────── */}
+      {/* 🧠 one-time brain key setup — per device, never leaves the browser */}
+      {keyOpen && (
+        <div
+          className="fixed inset-0 z-[70] grid place-items-center bg-black/75 p-6 backdrop-blur-md"
+          onClick={() => setKeyOpen(false)}
+        >
+          <div
+            className="hud w-full max-w-md rounded-3xl border border-[#3B82F6]/40 bg-[#071022]/95 p-6 shadow-[0_0_80px_rgba(59,130,246,0.35)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-black tracking-[0.3em] text-[#3B82F6] uppercase">🧠 Brain key</h2>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-400">
+                  Paste your DeepSeek API key once — it is saved <span className="text-[#93C5FD]">only in this browser</span>
+                  (never in the code or on GitHub) and powers my deepseek-flash replies.
+                </p>
+              </div>
+              <button
+                onClick={() => setKeyOpen(false)}
+                aria-label="Close"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-[#3B82F6]/30 text-[#3B82F6]/80 transition-colors hover:bg-[#3B82F6]/20 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <input
+              autoFocus
+              type="password"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const k = keyDraft.trim()
+                  if (k) {
+                    setDSKey(k)
+                    say('syrax', 'Brain connected — deepseek-flash is live. Ask me anything.')
+                  }
+                  setKeyDraft('')
+                  setKeyOpen(false)
+                }
+              }}
+              placeholder="sk-…"
+              className="mt-4 w-full rounded-xl border border-[#3B82F6]/30 bg-black/40 px-3 py-2.5 font-mono text-[13px] text-white outline-none transition-colors focus:border-[#3B82F6]"
+            />
+
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <a
+                href="https://platform.deepseek.com/api_keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-[#3B82F6] underline underline-offset-2 transition-colors hover:text-white"
+              >
+                Get a key ↗
+              </a>
+              <div className="flex gap-2">
+                {hasDSKey() && (
+                  <button
+                    onClick={() => {
+                      setDSKey('')
+                      setKeyDraft('')
+                    }}
+                    className="rounded-lg border border-red-400/40 px-3 py-1.5 text-[11px] text-red-300 transition-colors hover:bg-red-500/15"
+                  >
+                    Remove
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const k = keyDraft.trim()
+                    if (k) {
+                      setDSKey(k)
+                      say('syrax', 'Brain connected — deepseek-flash is live. Ask me anything.')
+                    }
+                    setKeyDraft('')
+                    setKeyOpen(false)
+                  }}
+                  className="rounded-lg bg-[#3B82F6] px-4 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#2563EB]"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-3 text-[10.5px] text-slate-500">
+              No key? Every voice command still works and Syrax answers with offline replies.
+            </p>
+          </div>
+        </div>
+      )}
+
       {aboutOpen && (
         <div
           className="fixed inset-0 z-[60] grid place-items-center bg-black/75 p-6 backdrop-blur-md"
           onClick={() => setAboutOpen(false)}
         >
           <div
-            className="hud relative max-h-[86vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-[#F30D76]/40 bg-[#12020a]/95 p-7 shadow-[0_0_80px_rgba(243,13,118,0.35)]"
+            className="hud relative max-h-[86vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-[#3B82F6]/40 bg-[#071022]/95 p-7 shadow-[0_0_80px_rgba(59,130,246,0.35)]"
             onClick={(e) => e.stopPropagation()}
           >
             <button
               onClick={() => setAboutOpen(false)}
               aria-label="Close about"
-              className="absolute top-4 right-4 grid h-8 w-8 place-items-center rounded-lg border border-[#F30D76]/30 text-[#F30D76]/80 transition-colors hover:bg-[#F30D76]/20 hover:text-white"
+              className="absolute top-4 right-4 grid h-8 w-8 place-items-center rounded-lg border border-[#3B82F6]/30 text-[#3B82F6]/80 transition-colors hover:bg-[#3B82F6]/20 hover:text-white"
             >
               ✕
             </button>
@@ -1314,32 +1461,32 @@ export default function Stage() {
               <h2
                 className="text-3xl font-black tracking-[0.3em] text-transparent"
                 style={{
-                  background: 'linear-gradient(180deg, #ffffff 10%, #ffd7e9 45%, #F30D76 85%)',
+                  background: 'linear-gradient(180deg, #ffffff 10%, #CFE3FF 45%, #3B82F6 85%)',
                   WebkitBackgroundClip: 'text',
                   backgroundClip: 'text',
                 }}
               >
                 SYRAX
               </h2>
-              <p className="mt-1 text-[10px] tracking-[0.42em] text-[#F30D76]/80 uppercase" style={{ paddingLeft: '0.42em' }}>
+              <p className="mt-1 text-[10px] tracking-[0.42em] text-[#3B82F6]/80 uppercase" style={{ paddingLeft: '0.42em' }}>
                 your privacy-first voice ai
               </p>
             </div>
 
             <p className="mt-5 text-[13.5px] leading-relaxed text-slate-300">{ABOUT_INTRO}</p>
-            <p className="mt-3 text-[14px] leading-relaxed font-semibold text-[#FF8AC2]">{ABOUT_PUNCHLINE}</p>
+            <p className="mt-3 text-[14px] leading-relaxed font-semibold text-[#93C5FD]">{ABOUT_PUNCHLINE}</p>
 
-            <h3 className="mt-6 text-[10px] font-semibold tracking-[0.3em] text-[#F30D76] uppercase">What I can do</h3>
+            <h3 className="mt-6 text-[10px] font-semibold tracking-[0.3em] text-[#3B82F6] uppercase">What I can do</h3>
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {ABOUT_OPERATIONS.map((op) => (
                 <div
                   key={op.label}
-                  className="flex items-center gap-2.5 rounded-xl border border-[#F30D76]/18 bg-[#F30D76]/[0.05] px-3 py-2.5"
+                  className="flex items-center gap-2.5 rounded-xl border border-[#3B82F6]/18 bg-[#3B82F6]/[0.05] px-3 py-2.5"
                 >
                   <span className="text-base">{op.icon}</span>
                   <span className="min-w-0">
                     <span className="block text-[12.5px] font-medium text-slate-100">{op.label}</span>
-                    <span className="block truncate text-[10.5px] text-[#F30D76]/60">{op.detail}</span>
+                    <span className="block truncate text-[10.5px] text-[#3B82F6]/60">{op.detail}</span>
                   </span>
                 </div>
               ))}

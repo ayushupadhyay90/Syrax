@@ -24,11 +24,8 @@ const SYSTEM_PROMPT = `You are Syrax, a fast voice assistant with a 3D particle 
 Always respond with a single JSON object, no markdown, in this exact shape:
 {"reply": "<short spoken answer>", "action": {"type": "play"|"open"|"close"|"none", "target": "youtube"|"google", "query": "<search terms>"}}
 Rules:
-- action.type "play" ONLY when the latest user message is a DIRECT request that names a specific song/title (query = song name + artist).
-- If the user wants music but names NO title ("play a song"), or answers with just a title/artist/genre, action is "none" and the reply asks what they'd like to hear — UNLESS their previous message asked for a song, then it's "play" with their answer as query.
-- action.type "open" only when the latest message DIRECTLY asks to OPEN/browse YouTube or a Google tab (query = search terms).
-- action.type "close" only for a direct command to close/exit/minimize the browser.
-- CRITICAL: never emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words. If it isn't a direct imperative command, action.type is "none".
+- You NEVER execute actions — a local command parser runs unmistakable commands (play/open/close) before your message even reaches you. Keep the action field in the JSON shape, but set action.type to "none" unless the user is plainly answering a song request you just made (then "play" with their answer as query).
+- NEVER emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words — any action you invent is dropped by the system anyway.
 - The product name is always "Syrax" — never "Cyrex" or any other spelling.
 - NEVER recite a long self-introduction, your creators, or your privacy/About statement — that intro exists only behind the About card. One short line maximum, and never repeat the same sentence twice.
 - ALWAYS fill the "reply" field with a real answer — for ANY question or request: general knowledge, opinions, recommendations ("best movies of all time"), short notes, explanations, or casual/personal-style chat → answer conversationally with actual substance (up to ~120 words; bullets are fine for lists). Keep it to 1-2 sentences only for simple small talk. Never return an empty reply or a non-answer.`
@@ -79,11 +76,14 @@ function cleanQuery(q: string): string {
  *  silence buffer) so voice commands still hold the browser's user-gesture
  *  window when it's time to open a tab. */
 export function localIntent(raw: string): AgentCommand | null {
-  // strip wake words — including how STT mishears us ("cyrex", "syrex"…)
+  // strip wake words — including how STT mishears us ("cyrex", "syrex"…) —
+  // then polite openers: "can you play X" / "please open youtube" are still
+  // clear commands ("will play later" stays untouched: "you" is required)
   const t = raw
     .toLowerCase()
     .trim()
     .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+    .replace(/^(?:(?:can|could|would|will)\s+you\s+(?:to\s+)?|(?:please|just|kindly)\s+)+/, '')
   if (!t) return null
 
   // ── safety rails: NEVER act on questions, negations, or hypotheticals ──
@@ -178,6 +178,97 @@ export function offlineReply(): AgentCommand {
 
 /* ── Brain call ────────────────────────────────────────────────────────── */
 
+/* ── One-time DeepSeek key (stored per device — GitHub Pages is static) ─ */
+
+const KEY_LS = 'syrax-ds-key'
+
+export function getDSKey(): string {
+  try {
+    return localStorage.getItem(KEY_LS) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setDSKey(k: string): void {
+  try {
+    if (k.trim()) localStorage.setItem(KEY_LS, k.trim())
+    else localStorage.removeItem(KEY_LS)
+  } catch {
+    /* private mode — the brain just stays offline */
+  }
+}
+
+export function hasDSKey(): boolean {
+  return getDSKey().length > 8
+}
+
+/** Direct browser → DeepSeek call (GitHub Pages has no server proxy).
+ *  Mirrors api/chat.mjs exactly: deepseek-flash, thinking disabled, JSON mode,
+ *  temp 0.5, max_tokens 384 — 2 attempts with the empty-body JSON nudge, 7s cap. */
+async function callDeepSeek(key: string, msgs: ChatMessage[]): Promise<string> {
+  const payload: Record<string, unknown> = {
+    model: 'deepseek-flash',
+    temperature: 0.5,
+    max_tokens: 384,
+    thinking: { type: 'disabled' },
+  }
+  if (JSON.stringify(msgs).toLowerCase().includes('json')) payload.response_format = { type: 'json_object' }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController()
+    const to = window.setTimeout(() => ctrl.abort(), 7000)
+    try {
+      const res = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          ...payload,
+          messages: attempt === 0 ? msgs : [...msgs, { role: 'user', content: 'Respond with valid JSON now.' }],
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        choices?: { message?: { content?: string } }[]
+      }
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 402) return 'KEY_BAD' // bad/empty key → guide the user
+        continue // rate limit / server hiccup → one retry
+      }
+      const content = data.choices?.[0]?.message?.content ?? ''
+      if (content.trim()) return content
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') break // dead network → fall back now
+    } finally {
+      window.clearTimeout(to)
+    }
+  }
+  return ''
+}
+
+/** Dev-only: local FastAPI proxy on :8000 (key stays server-side locally). */
+async function callProxy(msgs: ChatMessage[]): Promise<string> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController()
+    const to = window.setTimeout(() => ctrl.abort(), 7000)
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        body: JSON.stringify({ messages: msgs }),
+      })
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      const content = ((await res.json()) as { content: string }).content ?? ''
+      if (content.trim()) return content
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') break
+    } finally {
+      window.clearTimeout(to)
+    }
+  }
+  return ''
+}
+
 export async function askSyrax(history: ChatMessage[]): Promise<AgentCommand> {
   const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? ''
 
@@ -186,70 +277,41 @@ export async function askSyrax(history: ChatMessage[]): Promise<AgentCommand> {
   const local = localIntent(lastUser)
   if (local) return local
 
-  // Two attempts: cold starts and the model occasionally return an EMPTY or
-  // whitespace body (reproduced live as a silent bubble) — never let that
-  // reach the chat. If both fail → local fallback so there's ALWAYS a reply.
+  const msgs: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    // drop empty entries + cap the window: long sessions stay fast and
+    // stale context can't make the model repeat old statements
+    ...history.filter((m) => m.content.trim()).slice(-14),
+  ]
+
+  const key = getDSKey()
   let content = ''
-  for (let attempt = 0; attempt < 2 && !content.trim(); attempt++) {
-    const ctrl = new AbortController()
-    const to = window.setTimeout(() => ctrl.abort(), 7000) // never hang the reply
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: ctrl.signal,
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            // drop empty entries + cap the window: long sessions stay fast and
-            // stale context can't make the model repeat old statements
-            ...history.filter((m) => m.content.trim()).slice(-14),
-          ],
-        }),
-      })
-      if (!res.ok) throw new Error(`API error ${res.status}`)
-      content = ((await res.json()) as { content: string }).content ?? ''
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') break // dead network → answer now, don't wait again
-      content = '' // retry once, then fall back below
-    } finally {
-      window.clearTimeout(to)
+  if (key) content = await callDeepSeek(key, msgs) // browser-direct (GitHub Pages)
+  else if (import.meta.env.DEV) content = await callProxy(msgs) // local FastAPI :8000
+  if (content === 'KEY_BAD') {
+    return {
+      type: 'reply',
+      text: 'That brain key was rejected — tap the 🔑 button in the Conversation panel and paste a valid DeepSeek API key.',
     }
   }
   if (!content.trim()) return localAsk(lastUser) // ALWAYS answer something
 
   try {
-    const parsed = JSON.parse(content)
+    const parsed = JSON.parse(content) as { reply?: string; action?: { type?: string; query?: string } }
     const a = parsed.action ?? { type: 'none' }
-
-    // 🛡️ Hallucination guard — the model may "helpfully" invent a play/open
-    // action for casual chatter. Only act if the user's own words justify it:
-    // a command keyword, a short verb-less phrase that reads like a title/artist
-    // answer ("blinding lights"), and NEVER when their message is a question.
-    const wantsMedia = /\b(play|open|search|google|youtube|watch|hear|stream|listen|browse|close|exit|quit|shut|minimize|stop)\b/i.test(lastUser)
-    const looksLikeTitle =
-      lastUser.length <= 60 &&
-      !/[.?!,]/.test(lastUser) &&
-      lastUser.split(/\s+/).length <= 8
-    // "what if you opened youtube?" is a question — commands may carry a '?'
-    // ("play despacito?"), but only if they LEAD with a command verb.
-    const isQuestion =
-      lastUser.includes('?') &&
-      !/^\s*(play|put on|stream|listen|start|open|close|search|google|exit|quit|shut|minimize)\b/i.test(lastUser)
-    // never emit an empty/whitespace reply (the empty-bubble bug)
     const fallback = 'Hmm — say that again for me?'
-    if (a.type !== 'none' && (isQuestion || (!wantsMedia && !looksLikeTitle))) {
-      return { type: 'reply', text: (parsed.reply ?? '').trim() || fallback }
+
+    // 🛡️ CLEAR-COMMANDS-ONLY (user's choice): the local parser already found
+    // no unmistakable command above — so any play/open/close the model invents
+    // is DROPPED and it replies as plain chat (misfires impossible). The ONE
+    // exception: answering our own "which song?" prompt with a clean title.
+    const prevAssistant = [...history].reverse().find((m) => m.role === 'assistant')?.content ?? ''
+    const answeringSongPrompt = /title|artist|genre|want to hear|which song|what type of song/i.test(prevAssistant)
+    const looksLikeTitle = lastUser.length <= 60 && !/[.?!,]/.test(lastUser) && lastUser.split(/\s+/).length <= 8
+    if (a.type === 'play' && answeringSongPrompt && looksLikeTitle && !lastUser.includes('?')) {
+      return { type: 'play', query: (a.query ?? lastUser).trim() }
     }
 
-    if (a.type === 'play') {
-      // no query from the model → Stage asks the user which song they want
-      return { type: 'play', query: (a.query ?? '').trim() }
-    }
-    if (a.type === 'open' && (a.target === 'youtube' || a.target === 'google')) {
-      return { type: 'open', target: a.target, query: a.query ?? '' }
-    }
-    if (a.type === 'close') return { type: 'close' }
     return { type: 'reply', text: (parsed.reply ?? '').trim() || fallback }
   } catch {
     // model didn't give JSON — treat whole thing as plain reply (trimmed)

@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
+  // relative base → builds work both locally (localhost:5173) and on GitHub
+  // Pages (https://ayushupadhyay90.github.io/Syrax/), wherever the app is served
+  base: './',
   plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {
