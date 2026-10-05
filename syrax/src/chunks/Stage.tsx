@@ -389,13 +389,10 @@ export default function Stage() {
     // link that always works (a real click on the anchor = fresh gesture).
     const first = !popupGuideShown.current
     popupGuideShown.current = true
-    const settings = navigator.userAgent.includes('Edg/')
-      ? 'edge://settings/content/popups'
-      : 'chrome://settings/content/popups'
     say(
       'syrax',
       first
-        ? `The browser blocked the new tab — that's its popup blocker, not an error on your side. One-time fix: click the 🚫 “Popup blocked” icon at the right of the address bar → “Always allow pop-ups from this site” → Done. (Or paste ${settings} into the address bar → Add this site → Allow.) After that I'll open tabs directly every time. For now tap “Open ↗” below to go to ${label} now.`
+        ? `The browser blocked the new tab — that's its popup blocker. One-time fix: click the 🚫 “Popup blocked” badge next to the address bar → “Always allow pop-ups from this site” → Done. (Heads-up: this permission is saved PER SITE ADDRESS — allowing it on another site doesn't carry over. In the installed Syrax app, use ⋮ → Settings → Site settings → Pop-ups and redirects.) For now tap “Open ↗” below to go to ${label} now.`
         : `Popup still blocked — tap “Open ↗” below to open ${label} now (the one-time fix above makes it permanent).`,
       url,
     )
@@ -452,24 +449,32 @@ export default function Stage() {
     setStatus(videoPlaying ? 'Video paused' : 'Video playing')
   }
 
-  /**
-   * Chrome's user-gesture window for window.open() is ~5s after the mic
-   * click — but a spoken command finishes STT + the silence buffer LONG
-   * after that. So while the imperative phrase is still STREAMING in (fresh
-   * activation), pre-open a branded splash tab; by command time we only
-   * navigate it, which never needs a gesture. Runs on interim AND final text.
-   */
-  function reserveImperative(raw: string) {
+  /** Backstop: an unused splash never lingers (question/stop paths close it
+   *  explicitly — this only catches odd fall-throughs). Refreshed on every
+   *  interim, so slow speakers (>45s of dictation) never lose the tab. */
+  function armReserveTimer() {
+    if (reserveTimer.current) window.clearTimeout(reserveTimer.current)
+    reserveTimer.current = window.setTimeout(() => {
+      if (reservedTab.current) {
+        try {
+          reservedTab.current.close()
+        } catch {
+          /* gone */
+        }
+        reservedTab.current = null
+      }
+    }, 45000)
+  }
+
+  /** Ensure a splash tab exists — this MUST run inside a real user gesture
+   *  (the mic click): Chrome allows window.open() without popup permission
+   *  only for ~5s after an activation, and STT events never refresh it.
+   *  Grabbing the window AT THE CLICK is what makes voice commands
+   *  popup-proof — afterwards we only navigate it, which is never blocked. */
+  function reserveNow() {
     if (reservedTab.current) return
-    const clean = raw
-      .toLowerCase()
-      .trim()
-      .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
-    if (clean.includes('?')) return // questions never act — no stray tabs
-    if (!/^(open|show|launch|go to|play|put on|stream|listen to|search|look up|find)\s+\S/.test(clean)) return
-    // A tab is already open → the command will REUSE it (the user asked for
-    // "this thing in the particular tab") — a splash would just flash open
-    // and get closed again. Reserve only when a genuinely NEW tab is needed.
+    // A tab is already open → commands REUSE it (the user asked for "the
+    // particular tab") — a splash would just flash open and get closed again.
     if (
       openedTabs.current.some((t) => {
         try {
@@ -493,21 +498,32 @@ export default function Stage() {
     } catch {
       /* splash is cosmetic only */
     }
-    window.focus() // stay ON the Syrax tab — the mic must keep hearing us
+    try {
+      window.focus() // stay ON the Syrax tab — the mic must keep hearing us
+    } catch {
+      /* focus denied → the tab still opened */
+    }
     reservedTab.current = w
-    if (reserveTimer.current) window.clearTimeout(reserveTimer.current)
-    reserveTimer.current = window.setTimeout(() => {
-      // backstop: an unused splash never lingers (question/stop paths close
-      // it explicitly — this only catches odd fall-throughs)
-      if (reservedTab.current === w) {
-        try {
-          w.close()
-        } catch {
-          /* gone */
-        }
-        reservedTab.current = null
-      }
-    }, 20000)
+    armReserveTimer()
+  }
+
+  /**
+   * Secondary reserve: if speech starts FAST (within the mic-click gesture
+   * window) an imperative phrase can still grab a tab — otherwise reserveNow()
+   * at the click already holds it and this is a no-op.
+   */
+  function reserveImperative(raw: string) {
+    if (reservedTab.current) {
+      armReserveTimer() // still speaking → keep the reserved tab alive
+      return
+    }
+    const clean = raw
+      .toLowerCase()
+      .trim()
+      .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+    if (clean.includes('?')) return // questions never act — no stray tabs
+    if (!/^(open|show|launch|go to|play|put on|stream|listen to|search|look up|find)\s+\S/.test(clean)) return
+    reserveNow()
   }
 
   // ── voice in ────────────────────────────────────────────────────────────
@@ -997,6 +1013,7 @@ export default function Stage() {
     // ⏹ while Syrax speaks: stop the voice, restore the mic to what it was
     if (phase === 'speaking') {
       stopSpeaking()
+      reserveNow() // inside this CLICK gesture — next command can open tabs
       if (micRef.current) {
         void recognizerRef.current?.start()
         setPhase('listening')
@@ -1019,10 +1036,15 @@ export default function Stage() {
       setPhase('idle')
       setStatus('Tap the mic — or click an operation')
     } else {
+      // 🪟 INSIDE THE CLICK GESTURE: grab the tab now — Chrome only allows
+      // window.open() for ~5s after a real click, and speech never refreshes
+      // that window. Commands later just navigate this tab → never blocked.
+      reserveNow()
       // permission FIRST (real browser prompt), then listen — this replaces
       // the cryptic "blocked mid-task" failure the user kept hitting
       void (async () => {
         if (!(await ensureMicPermission())) {
+          closeReserve() // no mic → no command coming → drop the splash
           setStatus('Microphone blocked — use the Retry button below')
           return
         }
