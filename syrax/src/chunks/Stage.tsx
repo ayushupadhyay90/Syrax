@@ -167,78 +167,100 @@ const CHAT_MAX = 200
 
 /**
  * Resolve a YouTube search query → a real video id, PURELY IN THE BROWSER
- * (static hosting has no backend anymore). Best-effort with a strict budget —
- * every source can fail; the caller then opens the YouTube results page, so
- * the tab ALWAYS opens. Sources:
- *   0. /api/youtube (works in local dev, fast-404s elsewhere),
- *   1. CORS proxy of YouTube's own results HTML (same top hit the old
- *      Vercel server returned — matches what the user would click first),
- *   2. public Invidious API (JSON, CORS-enabled).
+ * (static hosting has no backend anymore). All sources are RACED in parallel —
+ * whichever answers first with a valid id wins; every source can fail (proxies
+ * rate-limit, instances rotate) and the caller then opens the YouTube results
+ * page, so the tab ALWAYS opens with the right query.
  */
+async function firstHit(ps: Promise<string | undefined>[]): Promise<string | undefined> {
+  return new Promise((done) => {
+    let left = ps.length
+    if (!left) return done(undefined)
+    for (const p of ps) {
+      p.then(
+        (v) => {
+          if (v) done(v)
+          else if (--left === 0) done(undefined)
+        },
+        () => {
+          if (--left === 0) done(undefined)
+        },
+      )
+    }
+  })
+}
+
 async function resolveVideo(query: string): Promise<string | undefined> {
-  const deadline = Date.now() + 4200 // whole budget — never hang the open
+  const BUDGET = 5000 // never hang the open — results page is the safety net
   const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
-  const grab = async (url: string): Promise<Response | undefined> => {
-    const remain = deadline - Date.now()
-    if (remain < 500) return undefined
+
+  const text = async (url: string): Promise<string | undefined> => {
     const ctrl = new AbortController()
-    const to = window.setTimeout(() => ctrl.abort(), remain)
+    const to = window.setTimeout(() => ctrl.abort(), BUDGET)
     try {
-      return await fetch(url, { signal: ctrl.signal })
+      const r = await fetch(url, { signal: ctrl.signal })
+      return r.ok ? await r.text() : undefined
     } catch {
       return undefined
     } finally {
       window.clearTimeout(to)
     }
   }
-  const cleanup = (id?: string) => {
-    if (id) return id
-    return undefined
-  }
-
-  // 0) local backend (dev) — one attempt, 404/405 = no backend → move on fast
-  try {
-    const r = await fetch(`/api/youtube?q=${encodeURIComponent(query)}`, {
-      signal: AbortSignal.timeout(1600),
-    })
-    if (r.ok) {
-      const d = (await r.json()) as { ids?: string[] }
-      if (d.ids?.length) return d.ids[0]
-    }
-  } catch {
-    /* static hosting → continue to browser sources */
-  }
-
-  // 1) CORS proxies over the real YouTube results page → top search hit
-  const proxies = [
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(ytUrl)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(ytUrl)}`,
-  ]
-  for (const p of proxies) {
-    const r = await grab(p)
-    if (r?.ok) {
-      const html = await r.text()
-      // "videoRenderer" = an actual search-result item (skips ads/related)
-      const id =
-        html.match(/"videoRenderer":\s*\{\s*"videoId":"([\w-]{11})"/)?.[1] ??
-        html.match(/"videoId":"([\w-]{11})"/)?.[1]
-      if (id) return cleanup(id)
-    }
-  }
-
-  // 2) Invidious public API
-  const iv = await grab(`https://inv.nadeko.net/api/v1/search?q=${encodeURIComponent(query)}&type=video`)
-  if (iv?.ok) {
+  const json = async (url: string): Promise<unknown> => {
+    const t = await text(url)
+    if (!t) return undefined
     try {
-      const d = (await iv.json()) as { videoId?: string }[]
-      const id = d?.[0]?.videoId
-      if (id) return cleanup(id)
+      return JSON.parse(t)
     } catch {
-      /* malformed → fall through */
+      return undefined
     }
   }
+  const htmlId = async (proxyPrefix: string): Promise<string | undefined> => {
+    const t = await text(proxyPrefix + encodeURIComponent(ytUrl))
+    if (!t) return undefined
+    // "videoRenderer" = a real search-result item (skips ads/related)
+    return (
+      t.match(/"videoRenderer":\s*\{\s*"videoId":"([\w-]{11})"/)?.[1] ??
+      t.match(/"videoId":"([\w-]{11})"/)?.[1]
+    )
+  }
+  const apiId = async (): Promise<string | undefined> => {
+    const d = (await json(`/api/youtube?q=${encodeURIComponent(query)}`)) as
+      | { ids?: string[] }
+      | undefined
+    return d?.ids?.[0]
+  }
+  const pipedId = async (base: string): Promise<string | undefined> => {
+    const d = (await json(`${base}/search?q=${encodeURIComponent(query)}&filter=videos`)) as
+      | { items?: { type?: string; url?: string }[] }
+      | undefined
+    const it = d?.items?.find((i) => i.type === 'stream' && (i.url ?? '').includes('v='))
+    return it?.url?.match(/v=([\w-]{11})/)?.[1]
+  }
+  const invId = async (base: string): Promise<string | undefined> => {
+    const d = (await json(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`)) as
+      | { videoId?: string; type?: string }[]
+      | undefined
+    return Array.isArray(d) ? d.find((x) => x.type === 'video')?.videoId : undefined
+  }
+  const jinaId = async (): Promise<string | undefined> => {
+    const t = await text(`https://r.jina.ai/${ytUrl}`)
+    return t?.match(/youtube\.com\/watch\?v=([\w-]{11})/)?.[1]
+  }
 
-  return undefined // caller opens the results page — always opens something
+  return (
+    (await firstHit([
+      apiId(), // local dev backend (fast 404 on static hosting)
+      htmlId('https://api.codetabs.com/v1/proxy?quest='), // strong, rate-limited
+      htmlId('https://api.allorigins.win/raw?url='),
+      invId('https://invidious.f5.si'), // verified: direct JSON, CORS, ~2s
+      invId('https://yewtu.be'),
+      invId('https://invidious.nerdvpn.de'),
+      jinaId(), // slow but reliable last resort
+      pipedId('https://pipedapi.adminforge.de'),
+      pipedId('https://api.piped.private.coffee'),
+    ])) ?? undefined
+  )
 }
 
 /** Shown inside the reserved tab while the real URL is still being decided. */
