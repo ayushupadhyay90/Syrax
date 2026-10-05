@@ -1057,6 +1057,14 @@ export default function Stage() {
         // watch page auto-plays → show the Now-Playing strip; a bare results
         // page (resolve failed) isn't playing, so it never lights up
         if (landed && id) setNowPlaying(query)
+        // durable chat link — the status line resets after a while, the chat
+        // keeps an "Open ↗" back to what Syrax actually opened
+        if (landed)
+          say(
+            'syrax',
+            id ? `▶ Now playing: ${query}` : `YouTube results for “${query}”`,
+            url,
+          )
       })()
       await sayOutLoud(spoken)
       return
@@ -1066,7 +1074,6 @@ export default function Stage() {
       // user request: open a REAL Chrome tab — never the embedded panel
       // (no phase/animation churn — the tab opens straight away)
       setStatus(statusText)
-      say('syrax', spoken)
       const q = cmd.query.trim()
       // Plain "search for X" (destination not named) continues IN THE
       // PARTICULAR TAB already open — "open a tab and search for someone …
@@ -1092,6 +1099,9 @@ export default function Stage() {
           : q
             ? `Google search “${q}”`
             : 'Google'
+      // chat carries the URL too → the always-working "Open ↗" link lives in
+      // the conversation, next to the reply, forever
+      say('syrax', spoken, url)
       if (chosen) {
         closeReserve() // reuse path never consumes the reserved splash
         let reused = true
@@ -1463,7 +1473,7 @@ export default function Stage() {
                   {m.who === 'you' ? 'You' : 'Syrax'}
                 </div>
                 <div className="flex items-end gap-2">
-                  <span className="min-w-0 flex-1">
+                  <span className="min-w-0 flex-1 break-words">
                     {m.text}
                     {m.href && (
                       <a
