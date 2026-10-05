@@ -83,17 +83,6 @@ const OPERATIONS: Op[] = [
   },
 ]
 
-function opFor(cmd: AgentCommand): string {
-  if (cmd.type === 'close') return 'close'
-  if (cmd.type === 'about') return 'about'
-  if (cmd.type === 'play') return 'song'
-  if (cmd.type === 'open') {
-    if (cmd.target === 'google') return 'tab'
-    return 'youtube'
-  }
-  return 'ask'
-}
-
 /** Pick a random element so repeated commands never sound identical. */
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
@@ -467,11 +456,6 @@ export default function Stage() {
     return false
   }
 
-  const highlight = (id: string) => {
-    setActiveOp(id)
-    if (opTimer.current) window.clearTimeout(opTimer.current)
-    opTimer.current = window.setTimeout(() => setActiveOp(null), 6000)
-  }
 
   /** STT constantly mishears "Syrax" as "Cyrex"/"Syrex" — fix before anything else. */
   const normalizeName = (text: string) =>
@@ -607,7 +591,7 @@ export default function Stage() {
     // waits much longer before firing, so the full command is always read
     // first (the old 0.9s fire-on-partial was the "searched too early" bug).
     const dangling = (s: string) =>
-      /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|some|the|a|an)$/.test(
+      /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|some|the|a|an|tab|tabs|browser|page)$/.test(
         s.trim().toLowerCase(),
       )
     const flushDelay = (s: string) => (dangling(s) ? 3500 : 900)
@@ -994,7 +978,6 @@ export default function Stage() {
         action: { type: 'none' },
       }),
     })
-    highlight(opFor(cmd))
     const { say: spoken, status: statusText } = describe(cmd)
 
     if (cmd.type === 'play') {
@@ -1017,7 +1000,6 @@ export default function Stage() {
       // Resolve the top hit first → direct watch URL; resolve failing (slow /
       // down) still opens the results page — nothing here can hang the open.
       const startRun = runIdRef.current
-      setPhase('searching')
       setStatus(statusText)
       say('syrax', spoken)
       quietMic() // media audio must never reach the mic — anywhere
@@ -1063,7 +1045,7 @@ export default function Stage() {
 
     if (cmd.type === 'open') {
       // user request: open a REAL Chrome tab — never the embedded panel
-      setPhase('searching')
+      // (no phase/animation churn — the tab opens straight away)
       setStatus(statusText)
       say('syrax', spoken)
       const q = cmd.query.trim()
@@ -1144,7 +1126,6 @@ export default function Stage() {
       setVideoPlaying(false)
       if (closeTimer.current) window.clearTimeout(closeTimer.current)
       closeTimer.current = window.setTimeout(() => setBrowser(null), 700)
-      setPhase('solving')
       const closeSpoken = closed > 0 || browser ? spoken : 'Nothing is open right now — no tabs to close.'
       setStatus(closed > 0 || browser ? statusText : 'Nothing to close')
       say('syrax', closeSpoken)
