@@ -821,7 +821,12 @@ export default function Stage() {
       const plausible =
         text.length <= 80 &&
         !text.includes('?') &&
-        !/^(hi|hello|hey|yo|namaste|no|nope|stop|cancel|close|exit|never|thanks|thank you)\b/.test(text)
+        // questions / small-talk are NOT song titles — "who made you" said
+        // while the song prompt is open must fall through to the brain,
+        // never play a video called "who made you"
+        !/^(hi|hello|hey|yo|namaste|no|nope|stop|cancel|close|exit|never|thanks|thank you|who|whom|what|when|where|why|how|which|is|are|do|does|did|can|could|would|should|will|tell me|explain)\b/.test(
+          text,
+        )
       if (explicit) {
         await run(explicit) // "play X" / "open youtube" said while waiting
         return
