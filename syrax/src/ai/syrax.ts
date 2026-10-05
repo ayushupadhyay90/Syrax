@@ -75,6 +75,17 @@ function cleanQuery(q: string): string {
  *  imperative IMMEDIATELY (flush right away instead of waiting out the
  *  silence buffer) so voice commands still hold the browser's user-gesture
  *  window when it's time to open a tab. */
+/** Strip filler from a song answer → a clean title for the YouTube tab.
+ *  "blinding lights please" → "blinding lights"; exported because Stage
+ *  feeds it the title when the user answers our "which song?" prompt. */
+export function cleanSongTitle(raw: string): string {
+  return raw
+    .replace(/\b(song|songs|music|track|tracks|album|for me|please|now|on youtube|it)\b/gi, '')
+    .replace(/^(a|an|the|some|any|that|this)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function localIntent(raw: string): AgentCommand | null {
   // strip wake words — including how STT mishears us ("cyrex", "syrex"…) —
   // then polite openers: "can you play X" / "please open youtube" are still

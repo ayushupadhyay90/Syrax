@@ -119,38 +119,39 @@ function drawIcon(size, { scale = 1 }) {
       }
 
       // ── bot face: two eyes + smile, clipped inside the bubble ──
+      //    (#CFE3FF — the theme's light blue, never plain white)
       if (dBub < 0) {
         const dEye = Math.min(sdC(x0 + 58, y0 - 5, 25), sdC(x0 - 58, y0 - 5, 25))
         const dSmArc = Math.abs(Math.hypot(x0, y0 + 6) - 62)
         const dSmile = y0 > -6 && Math.abs(x0) < 52 ? dSmArc : 999
         const dFace = Math.min(dEye, dSmile)
         const glow = Math.min(1, 0.5 * Math.exp(-(dFace * dFace) / (2 * 24 * 24)))
-        r += (234 - r) * glow * 0.75
-        g += (244 - g) * glow * 0.75
+        r += (207 - r) * glow * 0.75
+        g += (227 - g) * glow * 0.75
         b += (255 - b) * glow * 0.75
         const faceC = cov(dFace)
         if (faceC > 0) {
-          r += (255 - r) * faceC
-          g += (255 - g) * faceC
+          r += (217 - r) * faceC
+          g += (232 - g) * faceC
           b += (255 - b) * faceC
         }
       }
 
-      // ── crown: band sitting on the bubble + three pearls ──
+      // ── crown: band sitting on the bubble + three pearls (theme blue) ──
       const dCrown = Math.min(
         sdRB(x0, y0 + 112, 85, 18, 8),
         Math.min(sdC(x0 + 58, y0 + 140, 18), Math.min(sdC(x0, y0 + 152, 24), sdC(x0 - 58, y0 + 140, 18))),
       )
       const crownHalo = 0.5 * Math.exp(-(dCrown * dCrown) / (2 * 30 * 30))
-      r += 150 * crownHalo
-      g += 190 * crownHalo
-      b += 255 * crownHalo
+      r += 59 * crownHalo
+      g += 130 * crownHalo
+      b += 246 * crownHalo
       const crownC = cov(dCrown)
       if (crownC > 0) {
         const shade = 0.82 + 0.18 * Math.max(0, Math.min(1, (y0 + 160) / 45)) // brighter top
-        r += (226 * shade - r) * crownC
-        g += (238 * shade - g) * crownC
-        b += (255 * shade - b) * crownC
+        r += (147 * shade - r) * crownC
+        g += (197 * shade - g) * crownC
+        b += (253 * shade - b) * crownC
       }
 
       const i = (y * size + x) * 4

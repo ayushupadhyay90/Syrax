@@ -3,7 +3,7 @@ import type { OrbState } from 'thinking-orbs'
 import { OrbCanvas, useHeroSize } from './Chunk1'
 import { SpeechRecognizer } from '../voice/stt'
 import { speak, stopSpeaking } from '../voice/tts'
-import { askSyrax, localIntent, hasDSKey, setDSKey, type ChatMessage, type AgentCommand } from '../ai/syrax'
+import { askSyrax, localIntent, cleanSongTitle, hasDSKey, setDSKey, type ChatMessage, type AgentCommand } from '../ai/syrax'
 import { ABOUT_SPOKEN, ABOUT_TEXT, ABOUT_INTRO, ABOUT_PUNCHLINE, ABOUT_OPERATIONS } from '../ai/about'
 import { BrowserPanel, type BrowserTarget } from '../browser/BrowserPanel'
 
@@ -350,6 +350,8 @@ export default function Stage() {
   /** Voice utterance buffer — we respond once, after the full phrase. */
   const finalBuf = useRef('')
   const finalTimer = useRef<number | null>(null)
+  /** A "which song?" ask is pending — the next utterance IS the song title. */
+  const pendingSong = useRef(false)
   /** Real Chrome tabs Syrax opened — "close the browser" shuts them.
    *  Each remembers its kind so a follow-up "search for X" continues in THE
    *  PARTICULAR TAB already open (google search in a google tab, YouTube
@@ -599,9 +601,16 @@ export default function Stage() {
 
   // ── voice in ────────────────────────────────────────────────────────────
   useEffect(() => {
-    // "listen first, then respond": buffer final segments and fire only after
-    // the speaker ACTUALLY pauses (0.9s of silence) — never mid-statement.
-    // New speech (final OR interim) during the wait pushes the flush back.
+    // "listen first, THEN respond": buffer final segments and fire only after
+    // the speaker ACTUALLY pauses. A transcript ending on a dangling word
+    // ("…and search for", "open the", "play a") is clearly MID-SENTENCE — it
+    // waits much longer before firing, so the full command is always read
+    // first (the old 0.9s fire-on-partial was the "searched too early" bug).
+    const dangling = (s: string) =>
+      /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|some|the|a|an)$/.test(
+        s.trim().toLowerCase(),
+      )
+    const flushDelay = (s: string) => (dangling(s) ? 3500 : 900)
     const armFinalFlush = () => {
       if (finalTimer.current) window.clearTimeout(finalTimer.current)
       finalTimer.current = window.setTimeout(
@@ -611,7 +620,7 @@ export default function Stage() {
           finalTimer.current = null
           if (full) void handleSaid(full)
         },
-        900,
+        flushDelay(finalBuf.current),
       )
     }
 
@@ -634,7 +643,7 @@ export default function Stage() {
         // Complete imperative ("open youtube" / "play X" / "stop syrax")?
         // Fire NOW — the extra 1.3s of silence-wait only feels laggy and
         // burns the popup window; partial phrases still get the full buffer.
-        if (full && (localIntent(full) || isHalt(full))) {
+        if (full && !dangling(full) && (localIntent(full) || isHalt(full))) {
           if (finalTimer.current) {
             window.clearTimeout(finalTimer.current)
             finalTimer.current = null
@@ -753,6 +762,16 @@ export default function Stage() {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages])
 
+  // the YouTube tab got closed (swipe-away / close button / tab switcher) →
+  // the Now-Playing strip must stop claiming something is playing
+  useEffect(() => {
+    if (!nowPlaying) return
+    const t = window.setInterval(() => {
+      if (!liveTab('youtube')) setNowPlaying(null)
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [nowPlaying])
+
   /**
    * Speak a reply. ONE-SHOT model (user request): the mic ALWAYS ends off —
    * Syrax never keeps listening in the background. Tap the mic again for the
@@ -793,6 +812,27 @@ export default function Stage() {
         content: JSON.stringify({ reply: '[stopped]', action: { type: 'none' } }),
       })
       return
+    }
+
+    // 🎵 answering our own "which song?" prompt — the title arrives with NO
+    // verb ("blinding lights"), so run it DIRECTLY: no LLM round-trip, works
+    // with no brain key saved, and lands in a real YouTube tab
+    if (pendingSong.current) {
+      pendingSong.current = false
+      const explicit = localIntent(text)
+      const plausible =
+        text.length <= 80 &&
+        !text.includes('?') &&
+        !/^(hi|hello|hey|yo|namaste|no|nope|stop|cancel|close|exit|never|thanks|thank you)\b/.test(text)
+      if (explicit) {
+        await run(explicit) // "play X" / "open youtube" said while waiting
+        return
+      }
+      if (plausible) {
+        await run({ type: 'play', query: cleanSongTitle(text) })
+        return
+      }
+      // a genuine question → fall through to the brain (pending already reset)
     }
 
     // 🔑 first brain-ask with no key saved → open setup once (commands still run)
@@ -859,6 +899,7 @@ export default function Stage() {
 
   function haltAll() {
     runIdRef.current += 1 // drop any in-flight LLM reply or pending search
+    pendingSong.current = false // "stop" also abandons a pending "which song?"
     stopSpeaking() // cut TTS mid-sentence — "shut" means shut
     closeReserve() // never leave a half-open splash tab behind
     if (finalTimer.current) window.clearTimeout(finalTimer.current)
@@ -967,6 +1008,7 @@ export default function Stage() {
           'Tell me what you want to hear — song, artist, or genre?',
         ])
         say('syrax', askSong)
+        pendingSong.current = true // next utterance = the song title (handleSaid)
         inputRef.current?.focus()
         await sayOutLoud(askSong)
         return
@@ -983,7 +1025,7 @@ export default function Stage() {
         const id = await resolveVideo(query)
         if (startRun !== runIdRef.current) return // "stop" landed meanwhile
         const url = id
-          ? `https://www.youtube.com/watch?v=${id}`
+          ? `https://www.youtube.com/watch?v=${id}&autoplay=1`
           : `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
         const label = `YouTube — ${query}`
         // music continues in the YouTube tab Syrax already opened — never
@@ -1053,7 +1095,9 @@ export default function Stage() {
         closeReserve() // reuse path never consumes the reserved splash
         let reused = true
         try {
-          if (q) chosen.w.location.href = url // the search runs IN that tab
+          // ALWAYS navigate — bare "open youtube" must land on the homepage,
+          // never show whatever stale content that tab was left on
+          chosen.w.location.href = url
         } catch {
           reused = false // window is gone → forget it, open a fresh one
           openedTabs.current = openedTabs.current.filter((t) => t.w !== chosen.w)
@@ -1064,7 +1108,7 @@ export default function Stage() {
           } catch {
             /* focus denied → tab still did navigate */
           }
-          setStatus(`↗ ${label} — ${q ? 'searched in' : 'switched to'} your open tab`)
+          setStatus(`↗ ${label} — ${q ? 'searched in' : 'opened in'} your open tab`)
         } else {
           openTab(url, label, kind)
         }

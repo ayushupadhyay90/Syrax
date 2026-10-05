@@ -121,7 +121,7 @@ function browserSpeak(text: string): Promise<void> {
       voices.find((v) => v.lang.startsWith('en')) ??
       null
     if (voice) u.voice = voice
-    u.rate = 1.0
+    u.rate = 1.1 // snappier — replies feel instant instead of dragging
     u.pitch = 0.8
     u.onend = () => resolve()
     u.onerror = () => resolve()
