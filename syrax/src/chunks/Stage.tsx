@@ -424,6 +424,7 @@ export default function Stage() {
    *  3) blocked → ONE-time how-to-allow message + always-working "Open ↗".
    */
   function openTab(url: string, label: string, kind: 'youtube' | 'google'): boolean {
+    console.log(`[syrax] openTab url=${url.slice(0, 55)} reserve=${!!reservedTab.current}`)
     let w: Window | null = null
     const res = reservedTab.current
     if (res && !res.closed) {
@@ -978,9 +979,12 @@ export default function Stage() {
       setPhase('searching')
       setStatus(statusText)
       say('syrax', spoken)
+      console.log('[syrax] play: before-quietMic')
       quietMic() // media audio must never reach the mic — anywhere
       void (async () => {
+        console.log('[syrax] play: resolve-begin')
         const id = await resolveVideo(query)
+        console.log(`[syrax] play: resolved id=${id ?? 'none'} guardOk=${startRun === runIdRef.current}`)
         if (startRun !== runIdRef.current) return // "stop" landed meanwhile
         const url = id
           ? `https://www.youtube.com/watch?v=${id}`
