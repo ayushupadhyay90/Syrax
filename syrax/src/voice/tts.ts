@@ -16,6 +16,17 @@ let pocketDown = 0
 let audio: HTMLAudioElement | null = null
 let speaking = false
 
+/** GitHub Pages (and any static host) has NO backend — probing /api/tts and
+ *  localhost:8100 there only produces console errors + latency on every line.
+ *  Backend voices (Fish / Pocket) are tried only on dev or a local server. */
+function hasBackend(): boolean {
+  try {
+    return import.meta.env.DEV || ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+  } catch {
+    return false
+  }
+}
+
 export function isSpeaking() {
   return speaking
 }
@@ -44,7 +55,7 @@ export async function speak(text: string): Promise<void> {
 
 /** 1) Fish Audio via the backend proxy — premium neural voice. */
 async function fishSpeak(text: string): Promise<boolean> {
-  if (fishEnabled === false) return false
+  if (!hasBackend() || fishEnabled === false) return false
   const ctrl = new AbortController()
   const to = window.setTimeout(() => ctrl.abort(), 8000) // never stall the voice
   try {
@@ -73,6 +84,7 @@ async function fishSpeak(text: string): Promise<boolean> {
 
 /** 2) Pocket TTS local server (the original Syrax voice). */
 async function pocketSpeak(text: string): Promise<boolean> {
+  if (!hasBackend()) return false // static hosting → browser voice, zero probes
   if (Date.now() - pocketDown < 60_000) return false // known-down → don't re-wait
   const ctrl = new AbortController()
   const to = window.setTimeout(() => ctrl.abort(), 1000) // local server → fast fail

@@ -26,7 +26,7 @@ Always respond with a single JSON object, no markdown, in this exact shape:
 Rules:
 - You NEVER execute actions — a local command parser runs unmistakable commands (play/open/close) before your message even reaches you. Keep the action field in the JSON shape, but set action.type to "none" unless the user is plainly answering a song request you just made (then "play" with their answer as query).
 - NEVER emit play/open/close for questions, hypotheticals ("what if", "can you", "would you"), casual conversation, or mere mentions of these words — any action you invent is dropped by the system anyway.
-- NEVER narrate an action as if it already happened — no "Opening…", "Playing…", "Pulling up…", "I've opened…". You cannot perform actions. If the user is clearly commanding an open/play/search action, reply with ONE short line giving the exact clear phrase to use (for example: "Say it as one clear command — open YouTube.") and nothing more.
+- NEVER narrate an action as if it already happened — no "Opening…", "Playing…", "Pulling up…", "I've opened…". You cannot perform actions. NEVER instruct the user how to phrase a command (no "say it as one clear command", no "try saying…", no corrections of their wording) — if something reads like a command you cannot act on, keep the reply to one short honest line.
 - The product name is always "Syrax" — never "Cyrex" or any other spelling.
 - Identity questions get a DIRECT, clear answer — these facts are safe to state briefly: created by Ayush, Navam, and Sandeep; built with React + Vite, Tailwind CSS, Three.js (3D particle field), Web Speech API (speech recognition + text-to-speech), DeepSeek deepseek-flash (the language model), hosted as an installable PWA on GitHub Pages; theme electric blue #3B82F6 on near-black; voice commands open REAL browser tabs; the mic is one-shot and only clear commands execute (you never execute actions yourself).
 - Style: refined and clear — lead with the direct answer, then at most one short supporting sentence. Plain text only (no markdown, no emojis), no filler ("certainly", "great question"), never repeat yourself or restate the question. Numbered lines only when the user asks for a list.
@@ -85,17 +85,54 @@ export function cleanSongTitle(raw: string): string {
   return raw
     .replace(/\b(song|songs|music|track|tracks|album|for me|please|now|on youtube|it)\b/gi, '')
     .replace(/^(a|an|the|some|any|that|this)\s+/i, '')
+    // split answer: "play a song" fired, then "by Arijit Singh" arrived as
+    // the answer → the leading "by" is filler, the ARTIST is the query
+    .replace(/^(by|from)\s+/i, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
+/** Normalise any play-phrase into a YouTube query — "" means ASK. Shared by
+ *  "play X" and "open youtube and play X" so BOTH read the full phrase the
+ *  same way (categories, artists, random, generic placeholders, mishearings). */
+function playQuery(raw: string): string {
+  const full = raw.trim().replace(/\s+/g, ' ')
+  if (!full) return ''
+  // "play this video/that song" with no real title → Stage asks
+  if (/^(?:this|that|the)\s+(?:video|song|one)$/.test(full)) return ''
+  // "play any random …" = "play me ANYTHING" → a trending hit, never a
+  // search for the literal words and never the which-song? prompt
+  if (/^(?:(?:any|some|a|the)\s+)*random\b/.test(full)) return 'trending music video'
+  let core = full
+  // "any popular song by ARTIST" → the ARTIST after "by" wins (guard: the
+  // words before "by" must be song-qualifiers → the real title "stand by me"
+  // survives untouched)
+  const byM = core.match(/^(.+?)\s+by\s+(.+)$/)
+  if (byM && /\b(?:song|songs|music|track|tracks|album|any|some|popular|best|hit|hits|favorite|latest|new)\b/.test(byM[1])) {
+    core = byM[2]
+  }
+  // "any comedy type of video" / "any romantic song" → keep the CATEGORY
+  const cat = core.match(
+    /^(?:any|some)\s+(.+?)\s*(?:type\s+of\s+|kind\s+of\s+|sort\s+of\s+)?(video|videos|song|songs|track|tracks|music)$/,
+  )
+  if (cat?.[1]) return `${cat[1].trim()} ${cat[2]}`
+  const q = core
+    // strip filler words, then leading articles: "play a song" → "" (Stage
+    // then ASKS), "play the weeknd" → "weeknd"
+    .replace(/\b(song|songs|music|track|tracks|album|video|videos|for me|please|now|on youtube|it|something|whatever|random)\b/g, '')
+    .replace(/^(?:a|an|the|some|any|that|this)\s+/, '')
+    .replace(/^(?:by|from)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!q || /^(?:this|that)\s+(?:person|guy|artist|singer)$/.test(q)) return ''
+  return q === 'weekend' ? 'the weeknd' : q // STT hears "weekend" for The Weeknd
+}
+
 export function localIntent(raw: string): AgentCommand | null {
   // Strip, IN ANY ORDER/INTERLEAVING: conversational openers ("okay", "hey",
-  // "so"…), wake words incl. STT mishearings ("cyrex", "syrex"…), and polite
-  // prefixes. REAL BUG: bare "Okay open YouTube" used to survive stripping
-  // (the old opener group REQUIRED a wake word after it), no start-anchored
-  // rule matched, and the reply fell through to the chat AI — which TALKED
-  // about opening instead of doing it.
+  // "so"…), wake words incl. EVERY STT mishearing ("cyrex", "psycx", "sirex"…),
+  // and polite prefixes — so no prefixed utterance can slip past the
+  // start-anchored rules below and fall through to the chat AI.
   let t = raw.toLowerCase().trim()
   for (let i = 0; i < 3 && t; i++) {
     const before = t
@@ -104,7 +141,10 @@ export function localIntent(raw: string): AgentCommand | null {
         /^(?:(?:hey|hi|hello|yo|ok|okay|alright|all right|yeah|yep|yup|sure|so|well|um|uh|please|just|kindly)[,\s]+)+/,
         '',
       )
-      .replace(/^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+      .replace(
+        /^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax|psycx|psyx|syracs|zirex|syrx)\b[,\s]*/,
+        '',
+      )
       .replace(/^(?:(?:can|could|would|will)\s+you\s+(?:to\s+)?)+/, '')
       .trim()
     if (t === before) break
@@ -125,39 +165,9 @@ export function localIntent(raw: string): AgentCommand | null {
   const playMatch =
     t.match(/^(?:play|put on|stream|listen to)\s+(?:me\s+)?(.+)/) ??
     t.match(/^start\s+(?:the\s+)?(?:some\s+)?(?:music|song|songs|playlist|video|track)s?\s*(?:of\s+|for\s+)?(.*)/)
-  if (playMatch) {
-    const full = playMatch[1]
-    // "play any random video/song" = "play me ANYTHING" → a trending hit,
-    // never the which-song? prompt and never the literal words
-    if (/^(?:(?:any|some|a|the)\s+)*random\b/.test(full.trim())) {
-      return { type: 'play', query: 'trending music video' }
-    }
-    let core = full
-    // "any popular song by ARTIST" → the ARTIST after "by" becomes the query
-    // (guard: the words before "by" must be song-qualifiers, so the real
-    // title "stand by me" survives untouched)
-    const byM = core.match(/^(.+?)\s+by\s+(.+)$/)
-    if (byM && /\b(?:song|songs|music|track|tracks|album|any|some|popular|best|hit|hits|favorite|latest|new)\b/.test(byM[1])) {
-      core = byM[2]
-    }
-    const q = core
-      // strip filler words, then leading articles: "play a song" → "" (Stage
-      // then ASKS which song), "play the weeknd" → "weeknd", and generic
-      // placeholders too — "play this video" must ASK, never search the
-      // literal words "this video"
-      .replace(/\b(song|songs|music|track|tracks|album|video|videos|for me|please|now|on youtube|it|something|whatever|random)\b/g, '')
-      .replace(/^(?:a|an|the|some|any|that|this)\s+/, '')
-      // "play a song by Arijit Singh" → "arijit singh" — the ARTIST matters,
-      // the words "song by" don't (plays on YouTube, never asks here)
-      .replace(/^(?:by|from)\s+/i, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-    // STT hears "weekend" for The Weeknd constantly → fix the mishearing
-    const fixed = q === 'weekend' ? 'the weeknd' : q
-    // "play a song by this person" (no real name in the phrase) → still a question
-    if (/^(?:this|that)\s+(?:person|guy|artist|singer)$/.test(fixed)) return { type: 'play', query: '' }
-    return { type: 'play', query: fixed } // empty → Stage asks "which song?"
-  }
+  if (playMatch) return { type: 'play', query: playQuery(playMatch[1]) }
+  // bare "play" / "put on" alone → straight to the which-song? question
+  if (/^(?:play|put on|stream|listen to)$/.test(t)) return { type: 'play', query: '' }
 
   // "open youtube and play X" → DIRECT playback in a real tab (the play
   // branch), never a YouTube results page; "…and play this video" with no
@@ -166,9 +176,7 @@ export function localIntent(raw: string): AgentCommand | null {
     /^(?:open|show|launch|go to)\s+(?:up\s+)?(?:the\s+)?(?:youtube|you tube)\s+and\s+(?:play|put on|stream)\s+(.+)/,
   )
   if (ytPlay) {
-    let raw = ytPlay[1].trim()
-    if (/^(?:this|that|the)\s+(?:video|song|one)$/i.test(raw)) raw = ''
-    return { type: 'play', query: cleanQuery(raw) }
+    return { type: 'play', query: playQuery(ytPlay[1]) }
   }
 
   // open youtube (with or without query) — anchored; "…and search for X" /
@@ -178,6 +186,9 @@ export function localIntent(raw: string): AgentCommand | null {
   )
   if (yt) return { type: 'open', target: 'youtube', query: cleanQuery(yt[1] ?? '') }
 
+  // bare "open" with no object → same as opening a tab (a Google page)
+  if (/^open$/.test(t)) return { type: 'open', target: 'google', query: '' }
+
   // open a google tab / search / google … — anchored + word-boundary on "tab"
   // ("table", "cabinet" must never open a browser tab)
   const g =
@@ -185,7 +196,10 @@ export function localIntent(raw: string): AgentCommand | null {
     // "open google" / "open a google tab" — bare OR chained:
     // "open google and search for cats" → cats, in that tab
     t.match(/^(?:open\s+)?(?:a\s+|an\s+|the\s+|our\s+|my\s+|your\s+|another\s+|new\s+)*google\s*(?:tab)?(?:\s+and\s+(.*))?$/) ??
-    t.match(/^(?:open\s+)?(?:google|search|look up|find)\s+(?:for\s+)?(.+)/)
+    // "search for X" / "search X" / bare "search" / "look up X" / "find X"
+    // — ALL of these are the open-a-tab operation (bare forms fall through
+    // with an empty query → the default page, never an advice message)
+    t.match(/^(?:open\s+)?(?:google|search|look\s+up|find)\b\s*(?:for\s+)?(.*)$/)
   if (g) {
     const q = cleanQuery(g[1] ?? '') || 'news today'
     // "search for cars on youtube" → YouTube search, not Google
@@ -196,16 +210,6 @@ export function localIntent(raw: string): AgentCommand | null {
     // tab already open instead of stacking another one
     const explicit = /^(?:open\s+)?(?:a\s+)?(?:new\s+)?google\b/.test(t)
     return { type: 'open', target: 'google', query: q, ...(explicit ? { explicit: true } : {}) }
-  }
-
-  // command-shaped, but the parser couldn't make sense of it ("open the
-  // fridge") → honest LOCAL guidance instead of letting the chat AI dream up
-  // a fake "Opening…" reply it has no way to perform
-  if (/^(?:open|play|search|find|look up|put on|stream|listen to)\b/.test(t)) {
-    return {
-      type: 'reply',
-      text: 'I didn’t catch that as one clear command — say it as a single line, like “open YouTube”, “search for cats” or “play a song”.',
-    }
   }
 
   return null
@@ -252,7 +256,7 @@ export function offlineReply(): AgentCommand {
 function identityReply(raw: string): string | null {
   const t = raw
     .toLowerCase()
-    .replace(/^(hey |ok |okay |yo |please )?(syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+    .replace(/^(?:(?:hey|hi|ok|okay|yo|please)[,\s]+)*(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax|psycx|psyx|syracs|zirex|syrx)\b[,\s]*/, '')
     .replace(/[?.!,]+$/, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -289,6 +293,61 @@ function identityReply(raw: string): string | null {
   // privacy — honest, no claims we can't keep
   if (/\b(?:privacy|private|do you (?:store|save|keep|record)|is this (?:secure|safe)|tracking)\b/.test(t)) {
     return 'Straight answer: your messages go to DeepSeek’s API to get replies, so no — I won’t pretend otherwise. Your API key stays only on this device, the repo has no secrets, and the mic is one-shot: it never keeps listening after a command.'
+  }
+
+  return null
+}
+
+/* ── Real clock — the LLM has NO idea what time it is, so time / date /
+ *  world-clock questions are ALWAYS answered locally before the brain is
+ *  called (works with no key too). ─────────────────────────────────────── */
+
+const CITY_TZ: Record<string, string> = {
+  india: 'Asia/Kolkata', 'new delhi': 'Asia/Kolkata', delhi: 'Asia/Kolkata', mumbai: 'Asia/Kolkata',
+  kolkata: 'Asia/Kolkata', bangalore: 'Asia/Kolkata', chennai: 'Asia/Kolkata', hyderabad: 'Asia/Kolkata',
+  london: 'Europe/London', uk: 'Europe/London', england: 'Europe/London', paris: 'Europe/Paris',
+  germany: 'Europe/Berlin', berlin: 'Europe/Berlin', moscow: 'Europe/Moscow', istanbul: 'Europe/Istanbul',
+  'new york': 'America/New_York', nyc: 'America/New_York', usa: 'America/New_York',
+  'los angeles': 'America/Los_Angeles', chicago: 'America/Chicago', toronto: 'America/Toronto',
+  tokyo: 'Asia/Tokyo', japan: 'Asia/Tokyo', china: 'Asia/Shanghai', beijing: 'Asia/Shanghai',
+  'hong kong': 'Asia/Hong_Kong', singapore: 'Asia/Singapore', dubai: 'Asia/Dubai', uae: 'Asia/Dubai',
+  riyadh: 'Asia/Riyadh', doha: 'Asia/Qatar', sydney: 'Australia/Sydney', australia: 'Australia/Sydney',
+}
+
+const clockTime = (tz?: string) =>
+  new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(tz ? { timeZone: tz } : {}) })
+
+function worldReply(raw: string): string | null {
+  const t = raw
+    .toLowerCase()
+    .replace(/^(?:(?:hey|hi|ok|okay|yo|please|so|well)[,\s]+)*(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax|psycx|psyx|syracs|zirex|syrx)\b[,\s]*/, '')
+    .replace(/[?!.]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  // "time in Tokyo" / "what's the time in new york"
+  const inM = t.match(/\b(?:what(?:'s| is)?\s+)?(?:the\s+)?(?:current\s+)?time\s+(?:in|at|for)\s+(.+)$/)
+  if (inM) {
+    const place = inM[1].replace(/^(the |now |today )+/, '').trim()
+    const key = Object.keys(CITY_TZ).find((k) => place === k || place.includes(k))
+    if (key) return `It’s ${clockTime(CITY_TZ[key])} in ${place}.`
+    return `I can check the clock for India, London, New York, Los Angeles, Chicago, Toronto, Dubai, Paris, Berlin, Moscow, Istanbul, Tokyo, Beijing, Hong Kong, Singapore, Sydney or Riyadh — which one?`
+  }
+
+  // "world clock" — a handful of majors in one line
+  if (/\b(?:world clock|time around the world|global time|international time|times around|major cities time)\b/.test(t)) {
+    return `World clock — India ${clockTime('Asia/Kolkata')}, London ${clockTime('Europe/London')}, New York ${clockTime('America/New_York')}, Tokyo ${clockTime('Asia/Tokyo')}, Dubai ${clockTime('Asia/Dubai')}.`
+  }
+
+  // local time
+  if (/\b(?:what(?:'s| is)?\s+(?:the\s+)?(?:current\s+)?time|current time|time now|the clock|local time)\b/.test(t)) {
+    return `It’s ${clockTime()}.`
+  }
+
+  // local date / day
+  if (/\b(?:what(?:'s| is)?\s+(?:the\s+)?date|what day|which day|day is it|today's date|todays date)\b/.test(t)) {
+    const d = new Date()
+    return `Today is ${d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`
   }
 
   return null
@@ -399,11 +458,15 @@ export async function askSyrax(history: ChatMessage[]): Promise<AgentCommand> {
   const ident = identityReply(lastUser)
   if (ident) return { type: 'reply', text: ident }
 
+  // real clock — the LLM cannot know the time, so we answer locally
+  const clock = worldReply(lastUser)
+  if (clock) return { type: 'reply', text: clock }
+
   const msgs: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     // drop empty entries + cap the window: long sessions stay fast and
     // stale context can't make the model repeat old statements
-    ...history.filter((m) => m.content.trim()).slice(-14),
+    ...history.filter((m) => m.content.trim()).slice(-18),
   ]
 
   const key = getDSKey()

@@ -296,6 +296,30 @@ export default function Stage() {
     }
   }, [messages])
 
+  /** Ask Anything MEMORY: seed the brain's history from the persisted chat —
+   *  before this, a refresh showed the old conversation but the LLM started
+   *  with an EMPTY memory every load (it had no clue what was said before). */
+  useEffect(() => {
+    if (historyRef.current.length) return
+    try {
+      const raw = localStorage.getItem(CHAT_KEY)
+      const saved = raw ? (JSON.parse(raw) as Msg[]) : []
+      if (!Array.isArray(saved)) return
+      historyRef.current = saved.slice(-20).map((m) =>
+        m.who === 'you'
+          ? { role: 'user' as const, content: m.text }
+          : {
+              role: 'assistant' as const,
+              // JSON-shaped turns — DeepSeek answers first-try with these
+              content: JSON.stringify({ reply: m.text, action: { type: 'none' } }),
+            },
+      )
+    } catch {
+      /* corrupted save → the brain just starts with a fresh memory */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** One-time key handoff: open the app with ?key=sk-… → save it to this
    *  device's browser, then strip it from the URL (never left in history). */
   useEffect(() => {
@@ -485,9 +509,9 @@ export default function Stage() {
   }
 
 
-  /** STT constantly mishears "Syrax" as "Cyrex"/"Syrex" — fix before anything else. */
+  /** STT constantly mishears "Syrax" — fix every known garble before display. */
   const normalizeName = (text: string) =>
-    text.replace(/\b(cyrex|cyrax|syrex|sirex|zyrax|syracs|sirax|zirex|syrx)\b/gi, 'Syrax')
+    text.replace(/\b(cyrex|cyrax|syrex|sirex|zyrax|syracs|sirax|zirex|syrx|psycx|psyx|psirex)\b/gi, 'Syrax')
 
   /** Retry after blocking: re-requests the mic — on success go STRAIGHT into
    *  listening (no extra tap), on failure say exactly why + how to fix it. */
@@ -548,10 +572,10 @@ export default function Stage() {
     // waits much longer before firing, so the full command is always read
     // first (the old 0.9s fire-on-partial was the "searched too early" bug).
     const dangling = (s: string) =>
-      /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|some|the|a|an|tab|tabs|browser|page)$/.test(
+      /(?:\s|^)(and|or|then|plus|for|to|search|look|up|find|with|that|which|who|about|on|in|of|my|your|some|the|a|an|tab|tabs|browser|page|by|this|from|at|play|open|listen|stream|put|start|kind|type|sort)$/.test(
         s.trim().toLowerCase(),
       )
-    const flushDelay = (s: string) => (dangling(s) ? 3500 : 1200)
+    const flushDelay = (s: string) => (dangling(s) ? 3500 : 1500)
     const armFinalFlush = () => {
       if (finalTimer.current) window.clearTimeout(finalTimer.current)
       finalTimer.current = window.setTimeout(
@@ -901,10 +925,13 @@ export default function Stage() {
       .toLowerCase()
       .trim()
       .replace(/^(?:(?:hey|hi|ok|okay|yo|please|just|so|well)[,\s]+)+/, '')
-      .replace(/^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax)\b[,\s]*/, '')
+      .replace(
+        /^(?:syrax|cyrex|cyrax|syrex|sirex|zyrax|sirax|psycx|psyx|syracs|zirex|syrx)\b[,\s]*/,
+        '',
+      )
       .trim()
     return (
-      /^(stop|halt|cancel|pause)\s*(syrax|syrex|cyrex)?\s*[.!?]*$/.test(t) ||
+      /^(stop|halt|cancel|pause)\s*(syrax|syrex|cyrex|cyrax|sirex|sirax|zyrax|psycx|psyx|syracs|zirex|syrx)?\s*[.!?]*$/.test(t) ||
       /^(shut up|be quiet|quiet|silence|enough|that'?s enough|stop talking|stop responding|stop speaking|stop listening|stop searching|stop thinking|stop everything)[.!?]*$/.test(
         t,
       )
