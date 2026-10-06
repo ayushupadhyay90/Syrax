@@ -360,6 +360,8 @@ export default function Stage() {
   const finalTimer = useRef<number | null>(null)
   /** A "which song?" ask is pending — the next utterance IS the song title. */
   const pendingSong = useRef(false)
+  /** Auto-abandon that ask (and its keep-listening mic) if no answer comes. */
+  const pendingTimer = useRef<number | null>(null)
   /** Real Chrome tabs Syrax opened — "close the browser" shuts them.
    *  Each remembers its kind so a follow-up "search for X" continues in THE
    *  PARTICULAR TAB already open (google search in a google tab, YouTube
@@ -841,6 +843,7 @@ export default function Stage() {
     // with no brain key saved, and lands in a real YouTube tab
     if (pendingSong.current) {
       pendingSong.current = false
+      if (pendingTimer.current) window.clearTimeout(pendingTimer.current)
       const explicit = localIntent(text)
       const plausible =
         text.length <= 80 &&
@@ -941,6 +944,7 @@ export default function Stage() {
   function haltAll() {
     runIdRef.current += 1 // drop any in-flight LLM reply or pending search
     pendingSong.current = false // "stop" also abandons a pending "which song?"
+    if (pendingTimer.current) window.clearTimeout(pendingTimer.current)
     stopSpeaking() // cut TTS mid-sentence — "shut" means shut
     closeReserve() // never leave a half-open splash tab behind
     if (finalTimer.current) window.clearTimeout(finalTimer.current)
@@ -1051,6 +1055,52 @@ export default function Stage() {
         pendingSong.current = true // next utterance = the song title (handleSaid)
         inputRef.current?.focus()
         await sayOutLoud(askSong)
+        // The task is MID-FLIGHT — keep listening for the spoken answer:
+        // "play a song" → ask → "…by Arijit Singh" said right after MUST still
+        // be heard (the mic-off-after-task rule applies to FINISHED tasks).
+        // TTS already finished → no echo into the recognizer. Auto-disarm
+        // after 25s so a forgotten ask can never leave the mic running.
+        if (pendingSong.current) {
+          void (async () => {
+            try {
+              await recognizerRef.current?.start()
+            } catch {
+              /* start raced — isActive below reports it honestly */
+            }
+            if (!pendingSong.current) return // answered/abandoned meanwhile
+            if (!recognizerRef.current?.isActive) {
+              setPhase('idle')
+              setStatus('Tap the mic — or click an operation')
+              return
+            }
+            lastSttAt.current = Date.now()
+            sttHeals.current = 0
+            micRef.current = true
+            setMicOn(true)
+            setPhase('listening')
+            setInterim('')
+            setStatus('Listening for your song…')
+          })()
+        }
+        if (pendingTimer.current) window.clearTimeout(pendingTimer.current)
+        pendingTimer.current = window.setTimeout(() => {
+          if (!pendingSong.current) return
+          pendingSong.current = false
+          if (finalTimer.current) window.clearTimeout(finalTimer.current)
+          finalTimer.current = null
+          finalBuf.current = ''
+          if (micRef.current) {
+            micRef.current = false
+            setMicOn(false)
+            setPhase('idle')
+            try {
+              recognizerRef.current?.stop()
+            } catch {
+              /* already stopped */
+            }
+          }
+          setStatus('Tap the mic — or click an operation')
+        }, 25_000)
         return
       }
       // user request: music opens in a REAL Chrome tab (never the site panel).
