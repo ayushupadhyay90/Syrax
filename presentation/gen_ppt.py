@@ -144,11 +144,11 @@ text(s, 0.9, 4.12, 11.0, 1.5, [
     ('Speak  ·  Search  ·  Play — in real browser tabs', 18, MUTED, False),
 ], spacing=8)
 text(s, 0.9, 6.35, 11.5, 0.9, [
-    ('Created by Navam', 15, WHITE, True),
+    ('Created by Ayush, Navam & Sandeep', 15, WHITE, True),
     ('Live:  https://ayushupadhyay90.github.io/Syrax/', 14, BLUE, False),
 ], spacing=4)
 notes(s, 'Syrax — a voice agent you talk to like a person. It listens once, acts in real '
-         'Chrome tabs, and installs as an app on desktop and Android. Presenter: Navam.')
+         'Chrome tabs, and installs as an app on desktop and Android. Creators: Ayush, Navam & Sandeep.')
 
 # ─────────────────────── SLIDE 2 · WHAT IS SYRAX ───────────────────────
 s = slide(); header(s, 'What is Syrax?', 2)
@@ -287,7 +287,7 @@ text(s, 7.25, 2.2, 5.2, 2.6, [
 ], spacing=8)
 text(s, 0.6, 5.4, 12.1, 1.3, [
     ('Thank you', 40, WHITE, True),
-    ('Syrax — Mark 1  ·  Created by Navam', 16, MUTED, False),
+    ('Syrax — Mark 1  ·  Created by Ayush, Navam & Sandeep', 16, MUTED, False),
 ], spacing=6)
 notes(s, 'One URL for both experiences: the same responsive PWA runs on desktop and installs '
          'on Android. Questions?')
