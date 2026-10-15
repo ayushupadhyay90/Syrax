@@ -12,6 +12,7 @@ import os
 
 OUT_DIR = r"C:\Users\Ayush\OneDrive\Desktop\Syrax\docs"
 os.makedirs(OUT_DIR, exist_ok=True)
+LOGO = os.path.join(OUT_DIR, "bbdit-logo.jpg")   # institute emblem from the sample format
 
 C = WD_ALIGN_PARAGRAPH.CENTER
 J = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -92,25 +93,34 @@ def table(doc, headers, rows, widths=None, fsize=11):
 doc = new_doc()
 
 # ── title page (format, page 1) ──
+# institute logo, centred at the very top (image from the university sample PDF)
+try:
+    _lp = doc.add_paragraph()
+    _lp.alignment = C
+    _lp.paragraph_format.line_spacing = 1.0
+    _lp.paragraph_format.space_before = Pt(4)
+    _lp.add_run().add_picture(LOGO, width=Mm(30))
+except Exception:
+    pass  # logo file missing → text-only title page
 para(doc, "SYRAX: A VOICE-DRIVEN 3D PARTICLE WEB UI AGENT",
-     size=22, bold=True, align=C, spacing=1.0, before=18)
-para(doc, "A Project Synopsis", size=14, bold=True, align=C, spacing=1.0, before=24)
-para(doc, "Submitted by", size=14, bold=True, italic=True, align=C, spacing=1.0, before=18)
+     size=22, bold=True, align=C, spacing=1.0, before=8)
+para(doc, "A Project Synopsis", size=14, bold=True, align=C, spacing=1.0, before=12)
+para(doc, "Submitted by", size=14, bold=True, italic=True, align=C, spacing=1.0, before=12)
 for name, roll in TEAM:
-    para(doc, name, size=16, bold=True, align=C, spacing=1.0, before=10)
-    para(doc, roll, size=16, bold=True, align=C, spacing=1.0, before=4)
+    para(doc, name, size=16, bold=True, align=C, spacing=1.0, before=6)
+    para(doc, roll, size=16, bold=True, align=C, spacing=1.0, before=2)
 para(doc, "In partial fulfillment for the award of the degree of",
-     size=14, bold=True, italic=True, align=C, spacing=1.5, before=34)
-para(doc, "BACHELOR OF TECHNOLOGY", size=16, bold=True, align=C, spacing=1.0, before=8)
-para(doc, "IN", size=14, bold=True, align=C, spacing=1.0, before=4)
+     size=14, bold=True, italic=True, align=C, spacing=1.5, before=16)
+para(doc, "BACHELOR OF TECHNOLOGY", size=16, bold=True, align=C, spacing=1.0, before=6)
+para(doc, "IN", size=14, bold=True, align=C, spacing=1.0, before=2)
 para(doc, "COMPUTER SCIENCE AND ENGINEERING", size=16, bold=True, align=C, spacing=1.0, before=4)
-para(doc, "At", size=14, bold=True, align=C, spacing=1.0, before=40)
+para(doc, "At", size=14, bold=True, align=C, spacing=1.0, before=18)
 para(doc, "BABU BANARSI DAS INSTITUTE OF TECHNOLOGY, GHAZIABAD",
      size=16, bold=True, align=C, spacing=1.0, before=6)
 para(doc, "Affiliated to Dr. A.P.J. Abdul Kalam Technical University (AKTU), Lucknow",
-     size=14, bold=True, align=C, spacing=1.0, before=6)
-para(doc, "Department of CSE", size=16, bold=True, align=C, spacing=1.0, before=6)
-para(doc, "OCTOBER 2026", size=16, bold=True, align=C, spacing=1.0, before=44)
+     size=14, bold=True, align=C, spacing=1.0, before=4)
+para(doc, "Department of CSE", size=16, bold=True, align=C, spacing=1.0, before=4)
+para(doc, "OCTOBER 2026", size=16, bold=True, align=C, spacing=1.0, before=26)
 
 doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
 
