@@ -93,15 +93,6 @@ def table(doc, headers, rows, widths=None, fsize=11):
 doc = new_doc()
 
 # ── title page (format, page 1) ──
-# institute logo, centred at the very top (image from the university sample PDF)
-try:
-    _lp = doc.add_paragraph()
-    _lp.alignment = C
-    _lp.paragraph_format.line_spacing = 1.0
-    _lp.paragraph_format.space_before = Pt(4)
-    _lp.add_run().add_picture(LOGO, width=Mm(30))
-except Exception:
-    pass  # logo file missing → text-only title page
 para(doc, "SYRAX: A VOICE-DRIVEN 3D PARTICLE WEB UI AGENT",
      size=22, bold=True, align=C, spacing=1.0, before=8)
 para(doc, "A Project Synopsis", size=14, bold=True, align=C, spacing=1.0, before=12)
@@ -114,7 +105,17 @@ para(doc, "In partial fulfillment for the award of the degree of",
 para(doc, "BACHELOR OF TECHNOLOGY", size=16, bold=True, align=C, spacing=1.0, before=6)
 para(doc, "IN", size=14, bold=True, align=C, spacing=1.0, before=2)
 para(doc, "COMPUTER SCIENCE AND ENGINEERING", size=16, bold=True, align=C, spacing=1.0, before=4)
-para(doc, "At", size=14, bold=True, align=C, spacing=1.0, before=18)
+# institute logo — centred directly below the CSE line, generous size
+try:
+    _lp = doc.add_paragraph()
+    _lp.alignment = C
+    _lp.paragraph_format.line_spacing = 1.0
+    _lp.paragraph_format.space_before = Pt(12)
+    _lp.paragraph_format.space_after = Pt(0)
+    _lp.add_run().add_picture(LOGO, width=Mm(36))
+except Exception:
+    pass  # logo file missing → text-only title page
+para(doc, "At", size=14, bold=True, align=C, spacing=1.0, before=14)
 para(doc, "BABU BANARSI DAS INSTITUTE OF TECHNOLOGY, GHAZIABAD",
      size=16, bold=True, align=C, spacing=1.0, before=6)
 para(doc, "Affiliated to Dr. A.P.J. Abdul Kalam Technical University (AKTU), Lucknow",
